@@ -23,6 +23,8 @@ var VIEW = location.hash.slice(1) || "weather";
 var TAB = null;
 if (/^settings/.test(VIEW)) { TAB = VIEW.split("-")[1] || "general"; VIEW = "weather"; }
 try { localStorage.setItem("echo-display", "Kitchen Echo Show 8"); } catch (e) {}
+var THEME = /[?&]theme=([a-z]+)/.exec(location.search);
+window.EchoShow.prefs.set("theme", THEME ? THEME[1] : "midnight");
 var now = Date.now();
 function S(id, state, attrs) { return { entity_id: id, state: state, attributes: attrs || {}, last_updated: new Date().toISOString(), last_changed: new Date().toISOString() }; }
 var states = {};
@@ -46,6 +48,10 @@ put(S("media_player.living_room", "idle", Object.assign({}, base, { group_member
 var D = "kitchen_echo_show_8";
 put(S("switch." + D + "_mute", "off", { icon: "mdi:microphone-off" }));
 put(S("switch." + D + "_camera_enabled", "on"));
+put(S("switch." + D + "_rtsp_streaming", "off"));
+put(S("switch." + D + "_screensaver_motion_detection", "on"));
+put(S("switch." + D + "_screensaver_face_detection", "off"));
+put(S("sun.sun", "above_horizon", { elevation: 30 }));
 put(S("switch." + D + "_voice_satellite", "on"));
 put(S("switch." + D + "_wake_sound", "on"));
 put(S("switch." + D + "_adaptive_brightness", "off"));

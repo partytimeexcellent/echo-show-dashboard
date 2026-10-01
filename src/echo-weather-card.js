@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.0";
+  var VERSION = "1.7.0";
 
 
   // ---------- which display is this? ----------
@@ -318,7 +318,7 @@
   // ---------- styles ----------
 
   var STYLE = [
-    ":host{display:block;height:100vh;width:100%;overflow:hidden;font-family:var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif);color:#fff;-webkit-tap-highlight-color:transparent;}",
+    ":host{display:block;height:100vh;width:100%;overflow:hidden;font-family:var(--es-font,var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif));color:#fff;-webkit-tap-highlight-color:transparent;}",
     ".root{position:relative;height:100vh;width:100%;overflow:hidden;box-sizing:border-box;}",
     ".bg{position:absolute;left:0;top:0;right:0;bottom:0;transition:background 2s;}",
     ".fx{position:absolute;left:0;top:0;right:0;bottom:0;overflow:hidden;pointer-events:none;}",
@@ -347,7 +347,7 @@
     ".btn{flex:1 1 0;border-radius:1.6vh;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;cursor:pointer;}",
     ".btn.active{background:rgba(255,255,255,.24);}",
     ".btn ha-icon{--mdc-icon-size:5vh;width:5vh;height:5vh;display:inline-flex;color:rgba(255,255,255,.9);}",
-    ".btn .bdg{margin-left:1.2vh;font-size:3.8vh;line-height:1;font-variant-numeric:tabular-nums;color:#ffb340;white-space:nowrap;}",
+    ".btn .bdg{margin-left:1.2vh;font-size:3.8vh;line-height:1;font-variant-numeric:tabular-nums;color:var(--es-hi,#ffb340);white-space:nowrap;}",
     ".btn .bdg:empty{display:none;}",
     ".btn .bdg.done{color:#ff6b61;animation:ewc-blink 1s steps(1) infinite;}",
     "@keyframes ewc-blink{50%{opacity:.3;}}",
@@ -427,8 +427,8 @@
       var prof = matchDisplay(config.devices, name);
       self._timerPrefix = prof && prof.timer_prefix ? prof.timer_prefix : null;
       self._badgeSig = "";
-      self._runSeen = {};
-      self._doneSeen = {};
+      self._runSeen = null;
+      self._doneSeen = null;
       if (self._built && self._hass) self._updateBadges();
     });
   };
@@ -512,6 +512,7 @@
 
   EchoWeatherCard.prototype.disconnectedCallback = function () {
     if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
+    this._runSeen = null; this._doneSeen = null;
     this._unsubscribe();
     if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
     if (this._settingsEl) this._settingsEl.close();
@@ -658,9 +659,12 @@
     if (!info.length) return;
     // open_on_done / open_on_start: jump to the button's page when one of its timers
     // finishes, or when a new timer starts (e.g. by voice).
-    this._doneSeen = this._doneSeen || {};
-    this._runSeen = this._runSeen || {};
-    for (var q = 0; q < info.length; q++) {
+    // Only react to changes seen while this page is showing: the first update after the
+    // page opens just takes a snapshot (a timer started on another page isn't "new").
+    var armed = !!this._runSeen && this.isConnected;
+    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
+    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
+    for (var q = 0; this.isConnected && q < info.length; q++) {
       var bt = buttons[info[q].i];
       var prevRun = this._runSeen[info[q].i];
       var started = false;
@@ -672,7 +676,7 @@
           if (!was) started = true;
         }
       }
-      if (bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) {
+      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) {
         this._buttonTap(bt);
       }
       this._doneSeen[info[q].i] = info[q].done;
@@ -881,12 +885,17 @@
       waxing = moonSt.state.indexOf("waning") !== -1 || moonSt.state === "last_quarter" ? false : true;
     }
 
-    var sig = [c, night, anim, Math.round(illum * 50), waxing].join("|");
+    var sig = [c, night, anim, Math.round(illum * 50), waxing, window.EchoShow && window.EchoShow.theme ? window.EchoShow.theme().id : "", window.EchoShow ? window.EchoShow.prefs.get("weather_sky") : ""].join("|");
     if (sig === this._fxSig) return;
     this._fxSig = sig;
 
+    var ES = window.EchoShow, th = ES && ES.theme ? ES.theme() : null;
+    var skyP = ES ? ES.prefs.get("weather_sky") : null;
+    var sky = skyP !== null && skyP !== undefined ? !!skyP : !th || th.sky !== false;
     var bg;
-    if (night) {
+    if (!sky) {
+      bg = "var(--es-bg,#0a1022)";
+    } else if (night) {
       bg = wet || c === "cloudy" ? "linear-gradient(170deg,#0e131c 0%,#19212e 55%,#263041 100%)"
         : "linear-gradient(170deg,#0a1128 0%,#141e44 55%,#22305f 100%)";
     } else if (wet) {

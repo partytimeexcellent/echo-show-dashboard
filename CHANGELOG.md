@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- **Themes**: a new Look tab in settings with nine colour themes that apply to every page, popup and alert: Midnight (default), Black, Ocean, Forest, Aurora, Ember, Graphite, Night red and Terminal. Optionally switch to a different theme between sunset and sunrise. The weather page's live sky background can be turned off to use the theme's background instead.
+- Fixed: with a timer running, switching pages could jump back to the timers page. The weather and media pages now only jump when a timer starts or finishes while they're showing.
+- Settings: Kiosk Satellite's video stream (RTSP) switch on the General tab, and motion / face wake for the screensaver on the Display tab.
+- The timer countdown overlay is fully opaque.
+
 ## 1.1.0
 
 - **Settings panel**: the gear button opens the same tabbed settings on every page (`action: settings`). General: microphone, camera, voice assistant, wake sound, volumes, wake word sensitivity. Display: brightness, auto brightness, keep screen on, screensaver timeout and style, screen-cleaning mode, timer countdown position. Weather: source, animations, hourly wind. Timers: alarm volume, tone, test. Media: this display's room, follow what's playing, Music Assistant status. Alerts: chime, test alert, show dismissed alerts. About: display info, versions, reload / clear cache.

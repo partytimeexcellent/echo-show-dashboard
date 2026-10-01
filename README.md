@@ -97,7 +97,11 @@ echo_show:
       device: office_echo_show_8
 ```
 
-Choices made in the Weather, Media and Alerts tabs (weather source, this display's room, chime, timer countdown position) are stored on that display only.
+Choices made in the Look, Weather, Media and Alerts tabs (theme, weather source, this display's room, chime, timer countdown position) are stored on that display only, so each Echo Show can have its own theme.
+
+**Camera:** the Camera switch is Kiosk Satellite's own camera setting; with it off the app doesn't use the camera at all, so motion and face wake for the screensaver stop too. The Video stream switch (only shown if your Kiosk Satellite version has it) controls the RTSP stream on its own. The Echo Show 8 also has a physical camera shutter on top.
+
+**Themes:** the Look tab offers Midnight, Black, Ocean, Forest, Aurora, Ember, Graphite, Night red and Terminal, plus an optional different theme after sunset (uses `sun.sun`).
 
 ### echo-weather-card
 

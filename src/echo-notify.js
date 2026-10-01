@@ -23,7 +23,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.1.0";
+  var VERSION = "1.2.0";
   if (window.echoNotify && window.echoNotify.version) return;  // loaded twice
 
   var LS_DISMISSED = "echo-notify-dismissed";
@@ -187,11 +187,11 @@
   // ---------- the overlay ----------
   var STYLE = [
     ":host{all:initial;}",
-    ".wrap{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;background:rgba(2,4,10,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);font-family:var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif);color:#fff;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;animation:fade .25s ease-out;}",
+    ".wrap{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;background:rgba(2,4,10,.72);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);font-family:var(--es-font,var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif));color:#fff;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;animation:fade .25s ease-out;}",
     "@keyframes fade{from{opacity:0}to{opacity:1}}",
     "@keyframes pop{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}",
     "@keyframes pulse{0%,100%{box-shadow:0 0 0 0 var(--c)}50%{box-shadow:0 0 0 1.4vh transparent}}",
-    ".panel{position:relative;display:flex;flex-direction:column;width:86vw;max-height:90vh;box-sizing:border-box;background:linear-gradient(180deg,#1c2540,#121829);border:1px solid rgba(255,255,255,.1);border-radius:3.4vh;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;animation:pop .3s ease-out;}",
+    ".panel{position:relative;display:flex;flex-direction:column;width:86vw;max-height:90vh;box-sizing:border-box;background:linear-gradient(180deg,var(--es-pan1,#1c2540),var(--es-pan2,#121829));border:1px solid rgba(255,255,255,.1);border-radius:3.4vh;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;animation:pop .3s ease-out;}",
     ".bar{height:1.4vh;background:var(--c);flex:0 0 auto;}",
     ".hd{display:flex;align-items:center;gap:2.6vh;padding:3vh 3.6vh 2vh;flex:0 0 auto;}",
     ".ic{flex:0 0 auto;width:11vh;height:11vh;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--c22);color:var(--c);}",
