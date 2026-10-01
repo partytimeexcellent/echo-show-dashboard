@@ -158,7 +158,7 @@ node test/smoke.js               # load every card in Chromium (needs Playwright
 
 `test/index.html#weather` (or `#timers`, `#media`, `#notify`) shows each card against a fake Home Assistant in any browser.
 
-To release: bump `version` in `package.json`, run `node build.js`, commit, and push a tag `vX.Y.Z`. The release workflow attaches the bundle to a GitHub release, which is what HACS offers as an update.
+To release: bump `version` in `package.json`, run `node build.js`, commit, then publish a GitHub release with a new tag (e.g. `v1.1.0`). The release workflow attaches the bundle to it, and HACS offers it as an update. Releases marked *pre-release* only show up in HACS for people who enable beta versions.
 
 ## License
 

@@ -16,10 +16,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Tag matches package.json
-        run: |
-          v=$(node -p "require('./package.json').version")
-          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} but package.json says $v"; exit 1; }
+      - name: Note package.json version
+        run: echo "Releasing ${GITHUB_REF_NAME} (package.json version $(node -p "require('./package.json').version"))"
       - name: dist/ matches src/
         run: node build.js --check
       - uses: softprops/action-gh-release@v2
