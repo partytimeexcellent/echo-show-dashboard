@@ -1,0 +1,146 @@
+# Echo Show Dashboard - example dashboard
+# https://github.com/partytimeexcellent/echo-show-dashboard
+#
+# 1. Settings -> Dashboards -> Add dashboard -> "New dashboard from scratch",
+#    URL "echo-show" (the paths below assume that name).
+# 2. Open it, ⋮ -> Edit dashboard -> ⋮ -> Raw configuration editor, paste this file.
+# 3. Replace every entity marked  # <-- yours  with your own.
+#
+# Every view is a "panel" view, so each card fills the whole 1280x800 screen. The bottom
+# row of buttons is the same on every view; the `active: true` button marks the page
+# you're on.
+#
+# More than one Echo Show? Each card takes a `devices:` list of per-display overrides,
+# matched against the Kiosk Satellite device name (case-insensitive substring). The
+# example below gives a display named "...Office..." its own timer set.
+
+# Full-screen alerts (National Weather Service, persistent notifications whose id starts
+# with "echo_", and echo_notify events). Remove this block to turn them off.
+echo_notify:
+  sound: true
+  sound_repeat: 60               # re-chime severe/extreme alerts every 60 s until dismissed
+  sources:
+    nws:
+      enabled: true              # US only (api.weather.gov); uses your HA home location
+      interval: 300
+      min_severity: minor
+    persistent_notifications:
+      enabled: true
+      prefix: echo_
+    events:
+      enabled: true              # needs the display's HA user to be an administrator
+
+views:
+  - title: Weather
+    path: weather
+    icon: mdi:cloud-outline
+    type: panel
+    cards:
+      - type: custom:echo-weather-card
+        # Tap the source name on the card to switch between sources. At least one must
+        # be a weather.* entity (it also supplies the forecast).
+        sources:
+          - entity: weather.home                                   # <-- yours
+            name: Home
+          # A local sensor pair can be a source too (current conditions only):
+          # - name: Backyard
+          #   temperature: sensor.backyard_temperature
+          #   humidity: sensor.backyard_humidity
+        sunrise: sensor.sun_next_rising       # from the Sun integration ("next rising" sensor)
+        sunset: sensor.sun_next_setting
+        # aqi: sensor.my_air_quality_index    # optional
+        # moon: sensor.moon_phase             # optional (Moon integration)
+        animations: true
+        daily_days: 7
+        hourly_hours: 48
+        hourly_group: 2
+        buttons:
+          - icon: mdi:weather-partly-cloudy
+            navigation_path: /echo-show/weather
+            active: true
+          - icon: mdi:timer-sand
+            navigation_path: /echo-show/timers
+            timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
+            open_on_done: true        # jump to the timers page when a timer finishes
+            open_on_start: true       # ... and when one is started (e.g. by voice)
+          - icon: mdi:speaker-multiple
+            navigation_path: /echo-show/media
+          - icon: mdi:lightbulb-group  # spare buttons: add navigation_path or url
+          - icon: mdi:cog
+        devices:
+          - match: office
+            timer_prefix: office_timer
+
+  - title: Timers
+    path: timers
+    icon: mdi:timer-sand
+    type: panel
+    cards:
+      - type: custom:echo-timer-card
+        satellite: assist_satellite.kitchen_echo_show_8           # <-- yours (alarm pauses while it listens)
+        idle_path: /echo-show/weather   # go back here after idle_timeout when no timers run
+        idle_timeout: 180
+        buttons:
+          - icon: mdi:weather-partly-cloudy
+            navigation_path: /echo-show/weather
+          - icon: mdi:timer-sand
+            navigation_path: /echo-show/timers
+            active: true
+          - icon: mdi:speaker-multiple
+            navigation_path: /echo-show/media
+          - icon: mdi:lightbulb-group
+          - icon: mdi:cog
+            action: timer-settings      # opens the alarm volume / tone settings
+            settings:
+              device_volume_entity: number.kitchen_echo_show_8_volume  # <-- yours (for "Test")
+        devices:
+          - match: office
+            timer_prefix: office_timer
+            satellite: assist_satellite.office_echo_show_8         # <-- yours
+            settings:
+              device_volume_entity: null
+
+  - title: Media
+    path: media
+    icon: mdi:speaker-multiple
+    type: panel
+    cards:
+      - type: custom:echo-media-card
+        # Your speakers. `entity` is the Sonos (or other) media player; `ma_entity` is
+        # the matching Music Assistant player, needed for the library, Spotify and queue.
+        players:
+          - name: Kitchen
+            entity: media_player.kitchen_sonos                     # <-- yours
+            ma_entity: media_player.kitchen_sonos_2                # <-- yours
+          - name: Living Room
+            entity: media_player.living_room_sonos                 # <-- yours
+            ma_entity: media_player.living_room_sonos_2            # <-- yours
+        default_player: media_player.kitchen_sonos                 # the room this display controls
+        # Music Assistant config entry id (Settings -> Devices & services -> Music
+        # Assistant -> ⋮ -> the long id in the URL). Needed to browse the library/Spotify.
+        ma_config_entry: YOUR_MUSIC_ASSISTANT_ENTRY_ID             # <-- yours
+        # Optional: live queue straight from the Music Assistant server.
+        # Create a long-lived token in Music Assistant (Settings -> Users -> ⋮ ->
+        # Manage access tokens), ideally for a non-admin user. Anyone who can open this
+        # dashboard can read it.
+        # ma_url: [http://homeassistant.local:8095]
+        # ma_token: PASTE_TOKEN_HERE
+        idle_path: /echo-show/weather
+        idle_timeout: 180
+        buttons:
+          - icon: mdi:weather-partly-cloudy
+            navigation_path: /echo-show/weather
+          - icon: mdi:timer-sand
+            navigation_path: /echo-show/timers
+            timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
+            open_on_done: true
+            open_on_start: true
+          - icon: mdi:speaker-multiple
+            navigation_path: /echo-show/media
+            active: true
+          - icon: mdi:lightbulb-group
+          - icon: mdi:cog
+        devices:
+          - match: office
+            timer_prefix: office_timer
+            default_player: null          # follow whatever is playing

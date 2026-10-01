@@ -1,0 +1,6 @@
+{
+  "name": "Echo Show Dashboard",
+  "filename": "echo-show-dashboard.js",
+  "render_readme": true,
+  "homeassistant": "2024.8.0"
+}

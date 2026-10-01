@@ -1,0 +1,127 @@
+blueprint:
+  name: Echo Show timers - alarm when finished
+  description: >-
+    When one of a display's three Echo Show timers finishes: wake its screen, switch it to
+    the timers view and raise its volume to the alarm level. The timers page itself rings
+    until the timer is dismissed (on screen or by voice), then the volume goes back to
+    what it was. Create one automation from this blueprint per timer set / display.
+
+    Needs the helpers from packages/echo_show.yaml and
+    custom_templates/echo_timers.jinja from the Echo Show Dashboard repository.
+  domain: automation
+  source_url: https://github.com/partytimeexcellent/echo-show-dashboard/blob/main/homeassistant/blueprints/automation/echo_show/timer_alarm.yaml
+  input:
+    timer_prefix:
+      name: Timer set
+      description: Prefix of the display's timers (timer.<prefix>_1..3).
+      default: echo_timer
+      selector:
+        text: {}
+    volume_entity:
+      name: Display volume
+      description: The Kiosk Satellite volume number of this display (number.*_volume).
+      default: []
+      selector:
+        entity:
+          domain: number
+    screensaver_button:
+      name: Postpone-screensaver button (optional)
+      description: Kiosk Satellite button that wakes the screen.
+      default: []
+      selector:
+        entity:
+          domain: button
+    view_select:
+      name: Dashboard-view select (optional)
+      description: Kiosk Satellite "Dashboard view" select, used to open the timers view.
+      default: []
+      selector:
+        entity:
+          domain: select
+    timers_view:
+      name: Timers view
+      default: echo-show/timers
+      selector:
+        text: {}
+    alarm_volume:
+      name: Alarm volume helper
+      default: input_number.echo_timer_alarm_volume
+      selector:
+        entity:
+          domain: input_number
+
+mode: single
+max_exceeded: silent
+
+variables:
+  pfx: !input timer_prefix
+  vol: !input volume_entity
+  btn: !input screensaver_button
+  sel: !input view_select
+  view: !input timers_view
+  alarm_vol: !input alarm_volume
+
+trigger:
+  - platform: event
+    event_type: timer.finished
+
+condition:
+  - condition: template
+    value_template: >-
+      {{ trigger.event.data.entity_id in ['timer.' ~ pfx ~ '_1', 'timer.' ~ pfx ~ '_2', 'timer.' ~ pfx ~ '_3'] }}
+
+action:
+  # Remembered for this run only; later timers that finish while this one is still
+  # ringing are covered by the wait below (mode: single).
+  - variables:
+      saved_volume: "{{ states(vol) | float(40) if vol else none }}"
+  - if:
+      - condition: template
+        value_template: "{{ vol | length > 0 }}"
+    then:
+      - action: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: "{{ vol }}"
+        data:
+          value: "{{ states(alarm_vol) | float(100) }}"
+  - if:
+      - condition: template
+        value_template: "{{ btn | length > 0 }}"
+    then:
+      - action: button.press
+        continue_on_error: true
+        target:
+          entity_id: "{{ btn }}"
+  - if:
+      - condition: template
+        value_template: "{{ sel | length > 0 }}"
+    then:
+      - action: select.select_option
+        continue_on_error: true
+        target:
+          entity_id: "{{ sel }}"
+        data:
+          option: "{{ view }}"
+  - alias: Wait until every finished timer of this set has been dismissed
+    repeat:
+      sequence:
+        - wait_template: >-
+            {% from 'echo_timers.jinja' import slots_json %}{{ (slots_json(pfx) | from_json | selectattr('s', 'eq', 'done') | list | count) == 0 }}
+          timeout:
+            minutes: 30
+          continue_on_timeout: true
+      until:
+        - condition: template
+          value_template: >-
+            {% from 'echo_timers.jinja' import slots_json %}{{ (slots_json(pfx) | from_json | selectattr('s', 'eq', 'done') | list | count) == 0 or repeat.index >= 8 }}
+  - if:
+      - condition: template
+        value_template: "{{ vol | length > 0 and saved_volume is not none }}"
+    then:
+      - action: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: "{{ vol }}"
+        data:
+          value: "{{ saved_volume }}"

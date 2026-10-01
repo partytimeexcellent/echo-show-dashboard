@@ -1,0 +1,79 @@
+<!doctype html>
+<!--
+  Smoke-test page for dist/echo-show-dashboard.js with a fake Home Assistant.
+  Open test/index.html#weather (or #timers, #media, #notify) in a 1280x800 window,
+  or run `node test/smoke.js` (needs Playwright).
+-->
+<html><head><meta charset="utf-8"><title>Echo Show Dashboard test</title>
+<style>html,body{margin:0;background:#000;height:100%}</style>
+<script>
+// ha-icon stand-in: shows the icon name's initials so the layout is visible without HA.
+customElements.define("ha-icon", class extends HTMLElement {
+  static get observedAttributes() { return ["icon"]; }
+  connectedCallback() { this.r(); } attributeChangedCallback() { this.r(); }
+  r() { var n = (this.getAttribute("icon") || "").replace("mdi:", ""); this.style.cssText += ";box-sizing:border-box;border:2px solid currentColor;border-radius:30%;align-items:center;justify-content:center;font:bold 10px sans-serif;overflow:hidden"; this.textContent = n.split("-").map(function (s) { return s[0]; }).join("").toUpperCase(); }
+});
+window.errors = [];
+window.addEventListener("error", function (e) { errors.push(String(e.message)); });
+</script>
+<script src="../dist/echo-show-dashboard.js"></script>
+</head><body>
+<script>
+var VIEW = location.hash.slice(1) || "weather";
+var now = Date.now();
+function S(id, state, attrs) { return { entity_id: id, state: state, attributes: attrs || {}, last_updated: new Date().toISOString(), last_changed: new Date().toISOString() }; }
+var states = {};
+function put(s) { states[s.entity_id] = s; }
+put(S("weather.home", "partlycloudy", { temperature: 61, humidity: 72, wind_speed: 6, wind_bearing: 220, pressure: 1016, temperature_unit: "°F", wind_speed_unit: "mph", pressure_unit: "hPa", supported_features: 3, friendly_name: "Home" }));
+put(S("sun.sun", "above_horizon", { elevation: 30 }));
+put(S("sensor.sun_next_rising", new Date(now + 10 * 3600e3).toISOString()));
+put(S("sensor.sun_next_setting", new Date(now + 3 * 3600e3).toISOString()));
+put(S("timer.echo_timer_1", "active", { duration: "0:10:00", finishes_at: new Date(now + 312e3).toISOString(), remaining: "0:05:12" }));
+put(S("input_text.echo_timer_1_name", "Pasta"));
+put(S("timer.echo_timer_2", "paused", { duration: "0:20:00", remaining: "0:14:30" }));
+put(S("input_text.echo_timer_2_name", "Bread"));
+put(S("timer.echo_timer_3", "idle", { duration: "0:05:00" }));
+put(S("input_text.echo_timer_3_name", ""));
+put(S("input_select.echo_timer_alarm_tone", "Chime", { options: ["Chime", "Marimba", "Bells"] }));
+put(S("input_number.echo_timer_alarm_volume", "80", { min: 10, max: 100, step: 5 }));
+var base = { volume_level: 0.35, is_volume_muted: false, supported_features: 8321599 };
+put(S("media_player.kitchen", "playing", Object.assign({}, base, { group_members: ["media_player.kitchen"], media_title: "Answer to Your Name", media_artist: "Protoje", media_album_name: "Ancient Future", media_duration: 234, media_position: 81, media_position_updated_at: new Date().toISOString(), entity_picture: "art.jpg" })));
+put(S("media_player.living_room", "idle", Object.assign({}, base, { group_members: ["media_player.living_room"] })));
+
+function forecast(type) {
+  var out = [], step = type === "hourly" ? 3600e3 : 86400e3, n = type === "hourly" ? 48 : 7;
+  for (var i = 0; i < n; i++) out.push({ datetime: new Date(now + i * step).toISOString(), condition: ["sunny", "partlycloudy", "rainy", "cloudy"][i % 4], temperature: 55 + (i % 9), templow: 44 + (i % 5), precipitation_probability: (i * 13) % 100 });
+  return out;
+}
+var calls = [];
+var hass = {
+  states: states,
+  config: { latitude: 44, longitude: -123, unit_system: { temperature: "°F" }, time_zone: "America/Los_Angeles" },
+  user: { is_admin: true, name: "Test" },
+  language: "en", locale: { language: "en" },
+  callService: function (d, s, data) { calls.push([d, s, data]); return Promise.resolve(); },
+  callWS: function (m) { calls.push(["ws", m.type]); if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
+  connection: {
+    subscribeMessage: function (cb, msg) { if (msg.type === "weather/subscribe_forecast") setTimeout(function () { cb({ forecast: forecast(msg.forecast_type) }); }, 30); return Promise.resolve(function () {}); },
+    subscribeEvents: function () { return Promise.resolve(function () {}); },
+    addEventListener: function () {},
+  },
+};
+var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:timer-sand", navigation_path: "#timers", timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"] }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:lightbulb-group" }, { icon: "mdi:cog" }];
+var CONFIGS = {
+  weather: ["echo-weather-card", { sources: [{ entity: "weather.home", name: "Home" }], sunrise: "sensor.sun_next_rising", sunset: "sensor.sun_next_setting", animations: false, buttons: buttons }],
+  timers: ["echo-timer-card", { buttons: buttons, alarm: false }],
+  media: ["echo-media-card", { players: [{ name: "Kitchen", entity: "media_player.kitchen" }, { name: "Living Room", entity: "media_player.living_room" }], default_player: "media_player.kitchen", buttons: buttons, quick_favorites: 0 }],
+};
+if (VIEW === "notify") {
+  // echo-notify finds HA through <home-assistant>.hass, like in the real frontend.
+  var ha = document.createElement("home-assistant"); ha.hass = hass; document.body.appendChild(ha);
+  setTimeout(function () { window.echoNotify.show({ title: "Severe Thunderstorm Warning", severity: "severe", kicker: "Test", message: "This is a test notification.\n\nTap Dismiss to close it." }); }, 600);
+} else {
+  var c = CONFIGS[VIEW], card = document.createElement(c[0]);
+  card.setConfig(c[1]);
+  document.body.appendChild(card);
+  card.hass = hass;
+  window.card = card;
+}
+</script></body></html>
