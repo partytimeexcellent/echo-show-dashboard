@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.0";
+  var VERSION = "1.7.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -232,6 +232,9 @@
     ".tone:active,.test:active,.done:active{transform:scale(.96);}",
     ".dev{margin-top:2vh;text-align:center;font-size:2.4vh;opacity:.45;}",
   ].join("");
+  // Inside the shared settings panel: no backdrop, frame or header of its own.
+  var SET_EMBED = ":host{position:static;display:block;background:none;z-index:auto;}.bd,.hd,.dev{display:none;}" +
+    ".panel{width:auto;background:none;border:none;box-shadow:none;padding:0;border-radius:0;}";
 
   function EchoAlarmSettings() {
     var self = Reflect.construct(HTMLElement, [], EchoAlarmSettings);
@@ -268,7 +271,7 @@
     var root = this.attachShadow({ mode: "open" });
     var tones = "";
     for (var i = 0; i < Sound.names.length; i++) tones += '<div class="tone" role="button" data-t="' + esc(Sound.names[i]) + '">' + esc(Sound.names[i]) + "</div>";
-    root.innerHTML = "<style>" + SET_STYLE + "</style>" +
+    root.innerHTML = "<style>" + SET_STYLE + (this.embedded ? SET_EMBED : "") + "</style>" +
       '<div class="bd"></div><div class="panel"><div class="hd"><h2>Timer alarm</h2><div class="done" role="button">Done</div></div>' +
       '<div class="lbl"><span>Volume</span><span class="vv"></span></div>' +
       '<div class="vrow"><ha-icon icon="mdi:volume-low"></ha-icon><div class="track"><div class="fill"></div></div><ha-icon icon="mdi:volume-high"></ha-icon></div>' +
@@ -283,7 +286,7 @@
     echoDisplayName().then(function (name) { if (name) devEl.textContent = "This display: " + name; });
     // Keep touch gestures inside this card: stops the kiosk's swipe-between-views from
     // firing while dragging sliders (and on this page generally).
-    ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
+    if (!this.embedded) ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
       self.addEventListener(type, function (ev) { ev.stopPropagation(); });
     });
 
@@ -716,12 +719,14 @@
         var i = parseInt(ev.currentTarget.getAttribute("data-i"), 10);
         var btn = buttons[i];
         if (!btn) return;
-        if (btn.action === "timer-settings") {
+        if (btn.action === "settings" || btn.action === "timer-settings") {
           var sc = {}, k;
           for (k in (btn.settings || {})) sc[k] = btn.settings[k];
           for (k in (self._config.settings || {})) sc[k] = self._config.settings[k];
           sc.timers = self._config.slots.map(function (s) { return s.timer; });
-          window.EchoAlarmSettingsOpen(self, root.querySelector(".root"), sc);
+          // The shared settings panel (echo-show-common); the old timer-only popup otherwise.
+          if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { timers: sc.timers, alarm: sc });
+          else window.EchoAlarmSettingsOpen(self, root.querySelector(".root"), sc);
         } else if (btn.navigation_path) {
           navigate(btn.navigation_path);
         } else if (btn.url) {

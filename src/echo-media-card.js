@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.0";
+  var VERSION = "1.8.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -124,8 +124,8 @@
     ".ib ha-icon{--mdc-icon-size:4vh;width:4vh;height:4vh;}",
     ".ib.plain{background:none;border-color:transparent;}",
     /* meta */
-    ".meta{display:flex;flex-direction:column;min-width:0;}",
-    ".src{font-size:2.3vh;letter-spacing:.14em;text-transform:uppercase;opacity:.55;margin-bottom:1.2vh;display:flex;align-items:center;}",
+    ".meta{display:flex;flex-direction:column;align-items:center;text-align:center;min-width:0;}",
+    ".src{font-size:2.3vh;letter-spacing:.14em;text-transform:uppercase;opacity:.55;margin-bottom:1.2vh;display:flex;align-items:center;justify-content:center;}",
     ".src ha-icon{--mdc-icon-size:2.6vh;width:2.6vh;height:2.6vh;margin-right:.8vh;}",
     ".src:empty{display:none;}",
     ".ttl{font-size:5.6vh;font-weight:500;line-height:1.14;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}",
@@ -525,6 +525,7 @@
 
   // Card config plus the matching per-display overrides.
   EchoMediaCard.prototype._applyProfile = function (prof) {
+    this._prof = prof;
     var c = {}, k;
     for (k in this._raw) c[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") c[k] = prof[k];
@@ -555,6 +556,13 @@
       ma_urls: c.ma_url ? [].concat(c.ma_url) : [],
       ma_token: c.ma_token || null,
     };
+    // This display's choices from the settings panel.
+    var P = window.EchoShow ? window.EchoShow.prefs : null;
+    if (P) {
+      var room = P.get("media_room"), fol = P.get("media_follow");
+      if (room !== null && room !== undefined) this._config.default_player = room || null;
+      if (fol !== null && fol !== undefined) this._config.follow_playing = !!fol;
+    }
   };
 
   EchoMediaCard.prototype.getCardSize = function () { return 12; };
@@ -572,10 +580,20 @@
   });
 
   EchoMediaCard.prototype.connectedCallback = function () {
+    var self = this;
+    if (!this._onPrefs) this._onPrefs = function (ev) {
+      var k = ev.detail && ev.detail.key;
+      if (k !== "media_room" && k !== "media_follow") return;
+      self._applyProfile(self._prof || null);
+      if (!self._manual) self._sel = -1;
+      if (self._built && self._hass) self._update(true);
+    };
+    window.addEventListener("echo-show-prefs", this._onPrefs);
     if (this._built) { this._startIdle(); this._update(true); }
   };
 
   EchoMediaCard.prototype.disconnectedCallback = function () {
+    if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
     this._stopIdle();
     this._stopTick();
     if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
@@ -780,6 +798,8 @@
       '<div class="go" role="button" data-act="browse"><ha-icon icon="mdi:music-box-multiple-outline"></ha-icon>Browse music</div></div>' +
       '<div class="qf"></div></div>' +
       // overlays
+      // timer countdown: below the panels (z-index 5), so browse / speakers / queue cover it
+      '<echo-timer-overlay hidden auto-pos="media" style="z-index:4"></echo-timer-overlay>' +
       '<div class="ov browse hidden"></div>' +
       '<div class="ov spk hidden"></div>' +
       '<div class="ov queue hidden"></div>' +
@@ -796,6 +816,7 @@
     this._brEl = root.querySelector(".ov.browse");
     this._spEl = root.querySelector(".ov.spk");
     this._quEl = root.querySelector(".ov.queue");
+    this._ovEl = root.querySelector("echo-timer-overlay");
     this._toastEl = root.querySelector(".toast");
     var self = this;
 
@@ -867,7 +888,9 @@
 
   EchoMediaCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
-    if (btn.action === "timer-settings") {
+    if ((btn.action === "settings" || btn.action === "timer-settings") && window.EchoShow && window.EchoShow.openSettings) {
+      window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+    } else if (btn.action === "timer-settings") {
       if (!window.EchoAlarmSettingsOpen) return; // provided by echo-timer-card.js
       var sc = {}, k;
       for (k in (btn.settings || {})) sc[k] = btn.settings[k];
@@ -897,6 +920,7 @@
     if (force && !this._manual) this._sel = -1;
     if (changed) this._paint();
     this._updateBadges();
+    this._updateOverlay();
   };
 
   EchoMediaCard.prototype._paint = function () {
@@ -1471,6 +1495,10 @@
     if (this._maOff) return;
     var mc = this._ma(), self = this;
     if (!mc) return;
+    if (window.EchoShow) window.EchoShow.mediaStatus = function () {
+      return mc.state === "ready" ? { label: "Connected", detail: "Connected to " + mc.base }
+        : { label: mc.state === "down" ? "Not connected" : "Connecting", detail: mc.error || "Connecting to Music Assistant…" };
+    };
     this._maOff = mc.on(function (qid) {
       if (!self._quEl || self._quEl.classList.contains("hidden")) return;
       if (qid && qid !== self._maQueueRef(self._coord()).qid) return;
@@ -2237,6 +2265,21 @@
     var self = this;
     if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
     if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+  };
+
+  // The big countdown over this page (echo-show-common's <echo-timer-overlay>). Hidden
+  // while a panel (browse / speakers / queue) is open.
+  EchoMediaCard.prototype._overlayTimers = function () {
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
+    return [];
+  };
+  EchoMediaCard.prototype._updateOverlay = function () {
+    var el = this._ovEl;
+    if (!el || !el.update) return;
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
+    el.update(this._hass, this._overlayTimers());
   };
 
   EchoMediaCard.prototype._paintBadges = function () {

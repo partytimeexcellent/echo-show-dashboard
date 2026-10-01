@@ -1,10 +1,850 @@
 /*!
- * Echo Show Dashboard 1.0.0
+ * Echo Show Dashboard 1.1.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-weather-card 1.5.0, echo-timer-card 1.6.0, echo-media-card 1.7.0, echo-notify 1.0.0
+ * echo-show-common 1.1.0, echo-weather-card 1.6.0, echo-timer-card 1.7.0, echo-media-card 1.8.0, echo-notify 1.1.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
+
+/* ===== echo-show-common.js ===== */
+/*
+ * echo-show-common
+ * Shared pieces of the Echo Show dashboard, used by every card:
+ *
+ *  - Settings panel (<echo-show-settings>): opened by the gear button on every page.
+ *    Tabs for this display (microphone, camera, brightness, volume, screensaver, voice),
+ *    weather, timers, media, alerts and about. Device controls come from the Kiosk
+ *    Satellite app's Home Assistant entities and only show when they exist.
+ *  - Timer overlay (<echo-timer-overlay>): a large countdown on the other pages while a
+ *    timer is running.
+ *  - Per-display preferences (stored in this browser) that the cards read.
+ *
+ * Dashboard config (optional, top level of the raw dashboard config):
+ *   echo_show:
+ *     device: kitchen_echo_show_8      # Kiosk Satellite entity prefix; auto-detected
+ *     devices:                          # per-display overrides, matched on the device name
+ *       - match: office
+ *         device: office_echo_show_8
+ *
+ * Plain JavaScript, no dependencies, no build step. ES5-ish for older Chromium.
+ */
+(function () {
+  "use strict";
+
+  var VERSION = "1.1.0";
+  if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
+
+  function esc(s) {
+    return String(s === undefined || s === null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function num(v) { var n = parseFloat(v); return isNaN(n) ? null : n; }
+
+  function navigate(path) {
+    window.history.pushState(null, "", path);
+    window.dispatchEvent(new Event("location-changed", { bubbles: true, composed: true }));
+  }
+
+  // ---------- which display is this? (same rules as the cards) ----------
+  function echoDisplayName() {
+    if (window.__echoDisplayP) return window.__echoDisplayP;
+    var forced = null;
+    try {
+      var m = /[?&]echo_display=([^&]+)/.exec(window.location.search);
+      if (m) window.localStorage.setItem("echo-display", decodeURIComponent(m[1]));
+      forced = window.localStorage.getItem("echo-display");
+    } catch (e) { /* storage unavailable */ }
+    if (forced) window.__echoDisplayP = Promise.resolve(forced);
+    else if (window.kioskSatellite && window.kioskSatellite.getDeviceInfo) {
+      window.__echoDisplayP = window.kioskSatellite.getDeviceInfo().then(function (d) {
+        return d ? String(d.name || d.model || "") : "";
+      }, function () { return ""; });
+    } else window.__echoDisplayP = Promise.resolve("");
+    return window.__echoDisplayP;
+  }
+  function matchDisplay(devices, name) {
+    if (!devices || !name) return null;
+    var n = String(name).toLowerCase();
+    for (var i = 0; i < devices.length; i++) {
+      var mt = devices[i].match;
+      if (mt && n.indexOf(String(mt).toLowerCase()) !== -1) return devices[i];
+    }
+    return null;
+  }
+
+  // ---------- per-display preferences (this browser only) ----------
+  var PREF_KEY = "echo-show-prefs";
+  var PREF_DEFAULTS = {
+    overlay: "auto",             // timer overlay position: auto (per page)/top-right/top-left/bottom-right/bottom-left/off
+    weather_animations: null,    // null = card config
+    weather_wind: true,          // wind row in the hourly chart
+    media_room: null,            // entity of this display's room; null = card config
+    media_follow: null,          // follow whatever is playing; null = card config
+    notify_sound: null,          // alert chime on this display; null = dashboard config
+  };
+  var Prefs = {
+    all: function () {
+      var o = {}, k, s = {};
+      try { s = JSON.parse(window.localStorage.getItem(PREF_KEY) || "{}") || {}; } catch (e) { s = {}; }
+      for (k in PREF_DEFAULTS) o[k] = s[k] !== undefined ? s[k] : PREF_DEFAULTS[k];
+      return o;
+    },
+    get: function (k) { return this.all()[k]; },
+    set: function (k, v) {
+      var s = {};
+      try { s = JSON.parse(window.localStorage.getItem(PREF_KEY) || "{}") || {}; } catch (e) { s = {}; }
+      if (v === null || v === undefined) delete s[k]; else s[k] = v;
+      try { window.localStorage.setItem(PREF_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ }
+      window.dispatchEvent(new CustomEvent("echo-show-prefs", { detail: { key: k, value: v } }));
+    },
+  };
+
+  // ---------- dashboard config (top-level echo_show block + the cards in it) ----------
+  var dashCache = {};
+  function dashboardConfig(hass) {
+    var dash = window.location.pathname.split("/")[1] || "lovelace";
+    if (!dashCache[dash]) {
+      dashCache[dash] = hass.callWS({ type: "lovelace/config", url_path: dash === "lovelace" ? null : dash })
+        .then(function (c) { return c || {}; }, function () { delete dashCache[dash]; return {}; });
+    }
+    return dashCache[dash];
+  }
+  function cardsOfType(cfg, type) {
+    var out = [];
+    function walk(o) {
+      if (!o || typeof o !== "object") return;
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (o.type === type) out.push(o);
+      ["views", "cards", "sections", "card"].forEach(function (k) { if (o[k]) walk(o[k]); });
+    }
+    walk(cfg.views || []);
+    return out;
+  }
+
+  // ---------- Kiosk Satellite device entities ----------
+  function slugify(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  }
+  // switch.<slug>_<suffix>; Kiosk Satellite sometimes adds the area again (switch.kitchen_kitchen_echo_show_8_x).
+  function devEnt(hass, slug, domain, suffix) {
+    if (!slug || !hass) return null;
+    var direct = domain + "." + slug + "_" + suffix;
+    if (hass.states[direct]) return direct;
+    var tail = slug + "_" + suffix, pre = domain + ".";
+    for (var id in hass.states) {
+      if (id.indexOf(pre) === 0 && id.length > tail.length && id.slice(-tail.length - 1) === "_" + tail) return id;
+    }
+    return null;
+  }
+  function hasDevice(hass, slug) {
+    for (var id in hass.states) {
+      var o = id.slice(id.indexOf(".") + 1);
+      if (o.indexOf(slug + "_") === 0 || o.indexOf("_" + slug + "_") !== -1) return true;
+    }
+    return false;
+  }
+  // The display's entity prefix: configured, or derived from the Kiosk Satellite name.
+  function resolveDevice(hass, name, esCfg) {
+    var prof = esCfg ? matchDisplay(esCfg.devices, name) : null;
+    if (prof && prof.device) return prof.device;
+    if (esCfg && esCfg.device) return esCfg.device;
+    var slug = slugify(name);
+    if (slug && hasDevice(hass, slug)) return slug;
+    if (name) {
+      var ln = String(name).toLowerCase();
+      for (var id in hass.states) {
+        if (id.indexOf("assist_satellite.") === 0 && String(hass.states[id].attributes.friendly_name || "").toLowerCase() === ln) return id.split(".")[1];
+      }
+    }
+    return null;
+  }
+
+  // ---------- settings panel ----------
+  var TABS = [
+    { id: "general", icon: "mdi:tablet", label: "General" },
+    { id: "display", icon: "mdi:brightness-6", label: "Display" },
+    { id: "weather", icon: "mdi:weather-partly-cloudy", label: "Weather" },
+    { id: "timers", icon: "mdi:timer-sand", label: "Timers" },
+    { id: "media", icon: "mdi:speaker-multiple", label: "Media" },
+    { id: "alerts", icon: "mdi:alert-outline", label: "Alerts" },
+    { id: "about", icon: "mdi:information-outline", label: "About" },
+  ];
+
+  var SET_STYLE = [
+    ":host{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147482000;display:flex;align-items:center;justify-content:center;background:rgba(3,6,14,.66);font-family:var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif);color:#fff;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;}",
+    "ha-icon{display:inline-flex;}",
+    ".panel{position:relative;display:flex;width:94vw;height:90vh;box-sizing:border-box;background:linear-gradient(180deg,#1c2540,#121829);border:1px solid rgba(255,255,255,.1);border-radius:3.4vh;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;}",
+    /* left rail */
+    ".rail{flex:0 0 25vw;box-sizing:border-box;padding:3vh 1.6vh 2vh;background:rgba(0,0,0,.18);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;overflow-y:auto;}",
+    ".rail h1{margin:0 1.4vh 2.2vh;font-size:4.4vh;font-weight:400;}",
+    ".tab{display:flex;align-items:center;height:8.2vh;padding:0 1.8vh;border-radius:2vh;font-size:3vh;cursor:pointer;color:rgba(255,255,255,.75);flex:0 0 auto;}",
+    ".tab + .tab{margin-top:.6vh;}",
+    ".tab ha-icon{--mdc-icon-size:3.8vh;width:3.8vh;height:3.8vh;margin-right:1.6vh;opacity:.8;}",
+    ".tab.sel{background:rgba(255,159,10,.18);color:#ffc266;}",
+    ".tab.sel ha-icon{opacity:1;}",
+    /* right side */
+    ".side{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}",
+    ".hd{display:flex;align-items:center;padding:3vh 3.2vh 1.6vh;flex:0 0 auto;}",
+    ".hd h2{margin:0;font-size:4.2vh;font-weight:400;flex:1 1 auto;}",
+    ".done{font-size:3.2vh;padding:1.4vh 3.6vh;border-radius:3.5vh;background:linear-gradient(180deg,#ffab2e,#ff8a00);color:#1a1000;font-weight:500;cursor:pointer;}",
+    ".body{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 3.2vh 3vh;touch-action:pan-y;}",
+    ".body::-webkit-scrollbar{width:.6vh;}",
+    ".body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2);border-radius:.3vh;}",
+    ".sec{font-size:2.4vh;letter-spacing:.12em;text-transform:uppercase;opacity:.55;margin:2.6vh 0 1.3vh;}",
+    ".sec:first-child{margin-top:.4vh;}",
+    ".note{font-size:2.5vh;opacity:.6;line-height:1.4;margin:1vh 0;}",
+    /* toggle tiles */
+    ".tiles{display:grid;grid-template-columns:repeat(4,1fr);grid-gap:1.6vh;}",
+    ".tiles.c3{grid-template-columns:repeat(3,1fr);}",
+    ".tl{position:relative;height:15vh;border-radius:2.4vh;padding:1.8vh 2vh;box-sizing:border-box;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);cursor:pointer;display:flex;flex-direction:column;justify-content:space-between;}",
+    ".tl ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;opacity:.75;}",
+    ".tl .n{font-size:2.9vh;line-height:1.15;}",
+    ".tl .s{font-size:2.2vh;opacity:.55;margin-top:.3vh;}",
+    ".tl.on{background:rgba(255,159,10,.18);border-color:rgba(255,159,10,.55);}",
+    ".tl.on ha-icon{color:#ffb340;opacity:1;}",
+    ".tl.on .s{color:#ffc266;opacity:.9;}",
+    ".tl.alert{background:rgba(255,80,70,.14);border-color:rgba(255,90,80,.5);}",
+    ".tl.alert ha-icon,.tl.alert .s{color:#ff8a80;opacity:1;}",
+    ".tl.na{opacity:.35;pointer-events:none;}",
+    /* sliders */
+    ".sl{display:flex;align-items:center;margin-bottom:1.6vh;}",
+    ".sl ha-icon{--mdc-icon-size:4.2vh;width:4.2vh;height:4.2vh;opacity:.7;flex:0 0 auto;margin-right:2vh;}",
+    ".sl .lb{flex:0 0 22vh;font-size:2.9vh;}",
+    ".track{position:relative;flex:1 1 auto;height:7.6vh;border-radius:3.8vh;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.08);overflow:hidden;touch-action:none;cursor:ew-resize;}",
+    ".fill{position:absolute;left:0;top:0;bottom:0;width:100%;background:linear-gradient(90deg,rgba(255,138,0,.85),#ffb340);transform-origin:left;}",
+    ".track .v{position:absolute;right:2.2vh;top:0;bottom:0;display:flex;align-items:center;font-size:2.6vh;font-variant-numeric:tabular-nums;text-shadow:0 0 .6vh rgba(0,0,0,.6);}",
+    /* chips */
+    ".chips{display:flex;flex-wrap:wrap;gap:1.2vh;}",
+    ".chip{height:6.6vh;padding:0 2.6vh;border-radius:3.3vh;display:flex;align-items:center;font-size:2.7vh;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap;}",
+    ".chip.sel{background:rgba(255,159,10,.2);border-color:rgba(255,159,10,.6);color:#ffc266;}",
+    /* list rows */
+    ".row{display:flex;align-items:center;min-height:8.4vh;padding:0 2vh;border-radius:2vh;background:rgba(255,255,255,.045);cursor:pointer;}",
+    ".row + .row{margin-top:1vh;}",
+    ".row .t{flex:1 1 auto;min-width:0;font-size:2.9vh;}",
+    ".row .t small{display:block;font-size:2.2vh;opacity:.55;margin-top:.3vh;}",
+    ".row .r{font-size:2.6vh;opacity:.75;margin-left:2vh;white-space:nowrap;}",
+    ".row.sel{background:rgba(255,159,10,.16);}",
+    ".row.sel .r{color:#ffb340;opacity:1;}",
+    ".row.static{cursor:default;}",
+    /* switch (on/off pill) */
+    ".sw{flex:0 0 auto;width:9vh;height:5vh;border-radius:2.5vh;background:rgba(255,255,255,.18);position:relative;margin-left:2vh;transition:background .2s;}",
+    ".sw::after{content:'';position:absolute;left:.5vh;top:.5vh;width:4vh;height:4vh;border-radius:50%;background:#fff;transition:transform .2s;}",
+    ".sw.on{background:#ff9f0a;}",
+    ".sw.on::after{transform:translateX(4vh);}",
+    /* buttons */
+    ".btns{display:flex;flex-wrap:wrap;gap:1.4vh;}",
+    ".bt{height:8vh;padding:0 3.2vh;border-radius:4vh;display:flex;align-items:center;font-size:2.9vh;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.1);cursor:pointer;}",
+    ".bt ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;margin-right:1.2vh;}",
+    ".bt.go{background:linear-gradient(180deg,#3ad16a,#27a84f);border-color:transparent;}",
+    ".tl:active,.chip:active,.row:active,.bt:active,.done:active,.tab:active{transform:scale(.97);}",
+    /* info grid */
+    ".info{display:grid;grid-template-columns:1fr 1fr;grid-gap:1vh 2.4vh;}",
+    ".kv{display:flex;justify-content:space-between;font-size:2.6vh;padding:1.2vh 0;border-bottom:1px solid rgba(255,255,255,.06);}",
+    ".kv span:first-child{opacity:.55;}",
+    ".kv span:last-child{text-align:right;margin-left:2vh;word-break:break-all;}",
+    ".upd{color:#ffc266;}",
+    /* cleaning mode */
+    ".clean{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483600;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;}",
+    ".clean ha-icon{--mdc-icon-size:12vh;width:12vh;height:12vh;opacity:.6;}",
+    ".clean .big{font-size:12vh;font-weight:300;margin-top:2vh;font-variant-numeric:tabular-nums;}",
+    ".clean .sm{font-size:3vh;opacity:.6;margin-top:1vh;}",
+  ].join("");
+
+  function EchoShowSettings() {
+    var self = Reflect.construct(HTMLElement, [], EchoShowSettings);
+    self._hass = null;
+    self._ctx = {};
+    self._tab = "general";
+    self._drag = null;
+    self._local = {};      // entity -> value shown while waiting for HA after a change
+    return self;
+  }
+  EchoShowSettings.prototype = Object.create(HTMLElement.prototype);
+  EchoShowSettings.prototype.constructor = EchoShowSettings;
+  Object.setPrototypeOf(EchoShowSettings, HTMLElement);
+
+  Object.defineProperty(EchoShowSettings.prototype, "hass", {
+    set: function (h) {
+      this._hass = h;
+      if (this._alarmEl) this._alarmEl.hass = h;
+      if (this._built) this._refresh(false);
+    },
+    get: function () { return this._hass; },
+  });
+
+  EchoShowSettings.prototype._st = function (id) { return id && this._hass ? this._hass.states[id] : null; };
+  EchoShowSettings.prototype._dev = function (domain, suffix) { return devEnt(this._hass, this._device, domain, suffix); };
+
+  EchoShowSettings.prototype.open = function (hass, ctx) {
+    var self = this;
+    this._hass = hass;
+    this._ctx = ctx || {};
+    if (this._ctx.tab) this._tab = this._ctx.tab;
+    this._build();
+    document.body.appendChild(this);
+    Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
+      self._name = r[0];
+      self._dash = r[1] || {};
+      self._es = self._dash.echo_show || {};
+      self._device = resolveDevice(self._hass, self._name, self._es);
+      self._paintTabs();
+      self._refresh(true);
+    });
+  };
+
+  EchoShowSettings.prototype._build = function () {
+    if (this._built) return;
+    var self = this, root = this.attachShadow({ mode: "open" });
+    root.innerHTML = "<style>" + SET_STYLE + "</style>" +
+      '<div class="panel"><div class="rail"><h1>Settings</h1><div class="tabs"></div></div>' +
+      '<div class="side"><div class="hd"><h2></h2><div class="done" role="button">Done</div></div><div class="body"></div></div></div>';
+    this._tabsEl = root.querySelector(".tabs");
+    this._bodyEl = root.querySelector(".body");
+    this._titleEl = root.querySelector(".hd h2");
+    // Keep touches here: no swipe-between-views underneath.
+    ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "mousedown", "wheel"].forEach(function (t) {
+      self.addEventListener(t, function (ev) { ev.stopPropagation(); }, { passive: true });
+    });
+    this.addEventListener("click", function (ev) {
+      var path = ev.composedPath ? ev.composedPath() : [];
+      if (path[0] === self) self.close();  // backdrop
+    });
+    root.querySelector(".done").addEventListener("click", function () { self.close(); });
+    this._tabsEl.addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest(".tab") : null;
+      if (!t) return;
+      self._tab = t.getAttribute("data-t");
+      self._paintTabs();
+      self._refresh(true);
+    });
+    this._bodyEl.addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest("[data-a]") : null;
+      if (t) self._act(t.getAttribute("data-a"), t);
+    });
+    // Sliders: drag to set, sent on release.
+    this._bodyEl.addEventListener("pointerdown", function (ev) {
+      var tr = ev.target.closest ? ev.target.closest(".track") : null;
+      if (!tr) return;
+      self._drag = { el: tr, id: tr.getAttribute("data-id") };
+      try { tr.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      self._slide(ev.clientX);
+      ev.preventDefault();
+    });
+    this._bodyEl.addEventListener("pointermove", function (ev) { if (self._drag) self._slide(ev.clientX); });
+    var end = function () { if (self._drag) { self._commitSlide(); self._drag = null; } };
+    this._bodyEl.addEventListener("pointerup", end);
+    this._bodyEl.addEventListener("pointercancel", end);
+    this._built = true;
+    this._paintTabs();
+  };
+
+  // Which tabs make sense on this dashboard / display.
+  EchoShowSettings.prototype._tabsShown = function () {
+    var d = this._dash || {}, has = {};
+    has.general = true;
+    has.display = true;
+    has.weather = cardsOfType(d, "custom:echo-weather-card").length > 0;
+    has.timers = cardsOfType(d, "custom:echo-timer-card").length > 0;
+    has.media = cardsOfType(d, "custom:echo-media-card").length > 0;
+    has.alerts = !!d.echo_notify;
+    has.about = true;
+    if (!this._dash) { has.weather = has.timers = has.media = true; }
+    return TABS.filter(function (t) { return has[t.id]; });
+  };
+
+  EchoShowSettings.prototype._paintTabs = function () {
+    var tabs = this._tabsShown(), h = "", self = this;
+    if (!tabs.some(function (t) { return t.id === self._tab; })) this._tab = "general";
+    tabs.forEach(function (t) {
+      h += '<div class="tab' + (t.id === self._tab ? " sel" : "") + '" role="button" data-t="' + t.id + '"><ha-icon icon="' + t.icon + '"></ha-icon>' + t.label + "</div>";
+    });
+    this._tabsEl.innerHTML = h;
+    var cur = TABS.filter(function (t) { return t.id === self._tab; })[0];
+    this._titleEl.textContent = cur ? cur.label : "";
+  };
+
+  // Re-render the open tab when something it shows changed (not while dragging).
+  EchoShowSettings.prototype._refresh = function (force) {
+    if (!this._built || !this._hass || this._drag) return;
+    var html = this["_tab_" + this._tab] ? this["_tab_" + this._tab]() : "";
+    if (!force && html === this._html) return;
+    this._html = html;
+    var top = force ? 0 : this._bodyEl.scrollTop;
+    if (this._tab !== "timers" && this._alarmEl) { this._alarmEl._putBack && this._alarmEl._putBack(); this._alarmEl = null; }
+    this._bodyEl.innerHTML = html;
+    this._bodyEl.scrollTop = top;
+    if (this._tab === "timers") this._mountAlarm();
+  };
+
+  // --- small builders ---
+  EchoShowSettings.prototype._tile = function (id, icon, label, on, sub, act) {
+    if (!id) return "";
+    var st = this._st(id), na = !st || st.state === "unavailable";
+    return '<div class="tl' + (on ? " on" : "") + (na ? " na" : "") + '" role="button" data-a="' + (act || "toggle") + '" data-id="' + esc(id) + '">' +
+      '<ha-icon icon="' + icon + '"></ha-icon><div><div class="n">' + esc(label) + '</div><div class="s">' + esc(na ? "Unavailable" : sub) + "</div></div></div>";
+  };
+  EchoShowSettings.prototype._isOn = function (id) {
+    if (this._local[id] && this._local[id].until > Date.now()) return this._local[id].v === "on";
+    var s = this._st(id);
+    return !!s && s.state === "on";
+  };
+  EchoShowSettings.prototype._slider = function (id, icon, label, val, min, max, unit, kind) {
+    if (!id) return "";
+    var f = max > min ? clamp((val - min) / (max - min), 0, 1) : 0;
+    return '<div class="sl"><ha-icon icon="' + icon + '"></ha-icon><div class="lb">' + esc(label) + "</div>" +
+      '<div class="track" data-id="' + esc(id) + '" data-kind="' + kind + '" data-min="' + min + '" data-max="' + max + '" data-unit="' + esc(unit) + '">' +
+      '<div class="fill" style="transform:scaleX(' + f.toFixed(3) + ')"></div><div class="v">' + Math.round(val) + esc(unit) + "</div></div></div>";
+  };
+  EchoShowSettings.prototype._chips = function (opts, cur, act, extra) {
+    var h = '<div class="chips">';
+    opts.forEach(function (o) {
+      var v = typeof o === "object" ? o.v : o, l = typeof o === "object" ? o.l : o;
+      h += '<div class="chip' + (String(v) === String(cur) ? " sel" : "") + '" role="button" data-a="' + act + '" data-v="' + esc(v) + '"' + (extra || "") + ">" + esc(l) + "</div>";
+    });
+    return h + "</div>";
+  };
+  EchoShowSettings.prototype._switchRow = function (title, sub, on, act, data) {
+    return '<div class="row" role="button" data-a="' + act + '"' + (data || "") + '><div class="t">' + esc(title) + (sub ? "<small>" + esc(sub) + "</small>" : "") +
+      '</div><div class="sw' + (on ? " on" : "") + '"></div></div>';
+  };
+  EchoShowSettings.prototype._noDevice = function () {
+    return '<div class="note">This display isn\'t linked to its Kiosk Satellite controls' + (this._name ? ' ("' + esc(this._name) + '")' : "") +
+      ". Add <b>echo_show: device: &lt;entity prefix&gt;</b> to the dashboard's raw config, e.g. <b>kitchen_echo_show_8</b> for switch.kitchen_echo_show_8_mute.</div>";
+  };
+
+  // --- tabs ---
+  EchoShowSettings.prototype._tab_general = function () {
+    if (!this._device) return this._noDevice();
+    var mic = this._dev("switch", "mute"), cam = this._dev("switch", "camera_enabled");
+    var wake = this._dev("switch", "wake_sound"), sat = this._dev("switch", "voice_satellite");
+    var vol = this._dev("number", "volume"), avol = this._dev("number", "assistant_volume"), mvol = this._dev("number", "media_volume");
+    var sens = this._dev("select", "wake_word_sensitivity");
+    var h = '<div class="sec">Privacy</div><div class="tiles">';
+    if (mic) {
+      // The Kiosk Satellite switch is "Mute": on = microphone off.
+      var muted = this._isOn(mic), mt = this._tile(mic, muted ? "mdi:microphone-off" : "mdi:microphone", "Microphone", !muted, muted ? "Off · not listening" : "On", "toggle");
+      h += muted ? mt.replace('class="tl', 'class="tl alert') : mt;
+    }
+    if (cam) { var c = this._isOn(cam); h += this._tile(cam, c ? "mdi:camera" : "mdi:camera-off", "Camera", c, c ? "On" : "Off", "toggle"); }
+    if (sat) { var s = this._isOn(sat); h += this._tile(sat, s ? "mdi:account-voice" : "mdi:account-voice-off", "Voice assistant", s, s ? "On" : "Off", "toggle"); }
+    if (wake) { var w = this._isOn(wake); h += this._tile(wake, w ? "mdi:bullhorn" : "mdi:bullhorn-outline", "Wake sound", w, w ? "Beep when listening" : "Silent", "toggle"); }
+    h += "</div>";
+    if (vol || avol || mvol) {
+      h += '<div class="sec">Volume</div>';
+      if (vol) h += this._slider(vol, "mdi:volume-high", "Device", this._numVal(vol), 0, 100, "%", "number");
+      if (avol) h += this._slider(avol, "mdi:account-voice", "Assistant", this._numVal(avol), 0, 100, "%", "number");
+      if (mvol) h += this._slider(mvol, "mdi:music-note", "Media", this._numVal(mvol), 0, 100, "%", "number");
+    }
+    if (sens) {
+      var ss = this._st(sens);
+      h += '<div class="sec">Wake word sensitivity</div>' + this._chips((ss && ss.attributes.options) || [], this._selVal(sens), "select", ' data-id="' + esc(sens) + '"');
+    }
+    return h;
+  };
+
+  EchoShowSettings.prototype._tab_display = function () {
+    var h = "";
+    if (this._device) {
+      var scr = this._dev("light", "screen"), adapt = this._dev("switch", "adaptive_brightness");
+      var keep = this._dev("switch", "keep_screen_on"), sto = this._dev("number", "screensaver_timeout");
+      var smode = this._dev("select", "screensaver_mode");
+      if (scr || adapt || keep) {
+        h += '<div class="sec">Screen</div>';
+        if (scr) {
+          var st = this._st(scr), b = this._local[scr] && this._local[scr].until > Date.now() ? this._local[scr].v : (st && st.attributes.brightness !== undefined && st.attributes.brightness !== null ? st.attributes.brightness / 2.55 : 0);
+          h += this._slider(scr, "mdi:brightness-6", "Brightness", b, 0, 100, "%", "light");
+        }
+        h += '<div class="tiles c3">';
+        if (adapt) { var a = this._isOn(adapt); h += this._tile(adapt, "mdi:brightness-auto", "Auto brightness", a, a ? "Follows room light" : "Off", "toggle"); }
+        if (keep) { var k = this._isOn(keep); h += this._tile(keep, "mdi:lightbulb-on-outline", "Keep screen on", k, k ? "On" : "Off", "toggle"); }
+        h += '<div class="tl" role="button" data-a="clean"><ha-icon icon="mdi:spray-bottle"></ha-icon><div><div class="n">Clean screen</div><div class="s">Locks touch for 30 s</div></div></div>';
+        h += "</div>";
+      }
+      if (sto) {
+        var t = this._numVal(sto);
+        h += '<div class="sec">Screensaver after</div>' + this._chips([{ v: 60, l: "1 min" }, { v: 120, l: "2 min" }, { v: 300, l: "5 min" }, { v: 600, l: "10 min" }, { v: 900, l: "15 min" }, { v: 1800, l: "30 min" }, { v: 3600, l: "1 hr" }], Math.round(t), "number", ' data-id="' + esc(sto) + '"');
+      }
+      if (smode) {
+        var sm = this._st(smode);
+        var opts = ((sm && sm.attributes.options) || []).filter(function (o) { return /^(Dim|Black|Clock|Weather Mood|Photo Gallery)$/.test(o) || o === (sm && sm.state); });
+        h += '<div class="sec">Screensaver style</div>' + this._chips(opts, this._selVal(smode), "select", ' data-id="' + esc(smode) + '"');
+      }
+    } else {
+      h += this._noDevice();
+      h += '<div class="btns" style="margin:1vh 0 2vh"><div class="bt" role="button" data-a="clean"><ha-icon icon="mdi:spray-bottle"></ha-icon>Clean screen (30 s)</div></div>';
+    }
+    var ov = Prefs.get("overlay");
+    h += '<div class="sec">Timer countdown on other pages</div>' + this._chips([{ v: "auto", l: "Automatic" }, { v: "top-right", l: "Top right" }, { v: "top-left", l: "Top left" }, { v: "bottom-right", l: "Bottom right" }, { v: "bottom-left", l: "Bottom left" }, { v: "off", l: "Off" }], ov, "pref", ' data-k="overlay"');
+    return h;
+  };
+
+  EchoShowSettings.prototype._tab_weather = function () {
+    var cards = cardsOfType(this._dash || {}, "custom:echo-weather-card"), c = cards[0];
+    if (!c) return '<div class="note">There\'s no weather page on this dashboard.</div>';
+    var key = "echo-weather-card:source:" + (c.storage_key || "default"), cur = 0;
+    try { cur = parseInt(window.localStorage.getItem(key), 10) || 0; } catch (e) { cur = 0; }
+    var h = '<div class="sec">Weather source</div>', self = this;
+    (c.sources || []).forEach(function (s, i) {
+      var st = s.entity ? self._st(s.entity) : self._st(s.temperature);
+      var temp = st ? (s.entity && s.entity.indexOf("weather.") === 0 ? num(st.attributes.temperature) : num(st.state)) : null;
+      var sub = s.entity && s.entity.indexOf("weather.") === 0 ? (st ? "Forecast + current conditions" : "Unavailable") : "Current temperature only";
+      h += '<div class="row' + (i === cur ? " sel" : "") + '" role="button" data-a="wsource" data-k="' + esc(key) + '" data-v="' + i + '"><div class="t">' + esc(s.name || s.entity || "Source " + (i + 1)) + "<small>" + esc(sub) + '</small></div><div class="r">' + (temp === null ? "" : Math.round(temp) + "°") + (i === cur ? " ✓" : "") + "</div></div>";
+    });
+    var p = Prefs.all();
+    var anim = p.weather_animations === null ? c.animations !== false : p.weather_animations;
+    h += '<div class="sec">Display</div>';
+    h += this._switchRow("Animated weather", "Rain, snow, clouds and sun effects", anim, "prefbool", ' data-k="weather_animations" data-v="' + (anim ? "0" : "1") + '"');
+    h += this._switchRow("Wind in the hourly forecast", "Speed and direction under each hour", p.weather_wind !== false, "prefbool", ' data-k="weather_wind" data-v="' + (p.weather_wind !== false ? "0" : "1") + '"');
+    return h;
+  };
+
+  EchoShowSettings.prototype._tab_timers = function () {
+    return '<div class="sec">Alarm</div><div class="alarm"></div>' +
+      '<div class="note">Volume and tone are shared by every display and by the "alarm when finished" automation.</div>';
+  };
+  EchoShowSettings.prototype._mountAlarm = function () {
+    var host = this._bodyEl.querySelector(".alarm");
+    if (!host || !customElements.get("echo-alarm-settings")) return;
+    var el = document.createElement("echo-alarm-settings");
+    var cfg = {}, k;
+    if (this._ctx.alarm) {
+      for (k in this._ctx.alarm) cfg[k] = this._ctx.alarm[k];   // the timer card's own (per-display) settings
+    } else {
+      var tc = cardsOfType(this._dash || {}, "custom:echo-timer-card")[0] || {};
+      (tc.buttons || []).forEach(function (b) { if (b.settings) for (k in b.settings) if (k !== "device_volume_entity") cfg[k] = b.settings[k]; });
+    }
+    var es = (this._es && this._es.timers) || {};
+    for (k in es) cfg[k] = es[k];
+    // "Test" plays at the alarm volume on this display's own speaker.
+    var dv = this._device ? this._dev("number", "volume") : null;
+    if (dv) cfg.device_volume_entity = dv;
+    if (this._ctx.timers) cfg.timers = this._ctx.timers;
+    el.embedded = true;
+    el.config = cfg;
+    host.appendChild(el);
+    el.hass = this._hass;
+    this._alarmEl = el;
+  };
+
+  EchoShowSettings.prototype._tab_media = function () {
+    var c = cardsOfType(this._dash || {}, "custom:echo-media-card")[0];
+    if (!c) return '<div class="note">There\'s no media page on this dashboard.</div>';
+    var p = Prefs.all(), self = this;
+    var prof = matchDisplay(c.devices, this._name) || {};
+    var cfgRoom = prof.default_player !== undefined ? prof.default_player : c.default_player;
+    var room = p.media_room !== null ? p.media_room : cfgRoom;
+    var h = '<div class="sec">This display controls</div>';
+    (c.players || []).forEach(function (pl) {
+      if (typeof pl === "string") pl = { entity: pl };
+      var st = self._st(pl.entity);
+      var sub = st ? (st.state === "playing" ? "Playing · " + (st.attributes.media_title || "") : st.state === "paused" ? "Paused" : "Idle") : "Unavailable";
+      h += '<div class="row' + (room === pl.entity ? " sel" : "") + '" role="button" data-a="mroom" data-v="' + esc(pl.entity) + '"><div class="t">' + esc(pl.name || (st && st.attributes.friendly_name) || pl.entity) +
+        "<small>" + esc(sub) + '</small></div><div class="r">' + (room === pl.entity ? "✓" : "") + "</div></div>";
+    });
+    h += '<div class="row' + (!room ? " sel" : "") + '" role="button" data-a="mroom" data-v=""><div class="t">No fixed room<small>Show whatever is playing</small></div><div class="r">' + (!room ? "✓" : "") + "</div></div>";
+    var follow = p.media_follow !== null ? p.media_follow : c.follow_playing !== false;
+    h += '<div class="sec">Behaviour</div>' + this._switchRow("Follow what's playing", "When this room is quiet, show another room that's playing", follow, "prefbool", ' data-k="media_follow" data-v="' + (follow ? "0" : "1") + '"');
+    var ms = window.EchoShow.mediaStatus ? window.EchoShow.mediaStatus() : null;
+    if (c.ma_url && c.ma_token) {
+      h += '<div class="sec">Music Assistant</div><div class="row static"><div class="t">Live queue<small>' + esc(ms ? ms.detail : "Opens when the media page is first shown") +
+        '</small></div><div class="r">' + esc(ms ? ms.label : "—") + "</div></div>";
+    }
+    return h;
+  };
+
+  EchoShowSettings.prototype._tab_alerts = function () {
+    var n = window.echoNotify, d = (this._dash && this._dash.echo_notify) || {}, p = Prefs.all();
+    var snd = p.notify_sound !== null ? p.notify_sound : d.sound !== false;
+    var h = '<div class="sec">On this display</div>' + this._switchRow("Chime for new alerts", "Severe alerts can repeat until dismissed", snd, "prefbool", ' data-k="notify_sound" data-v="' + (snd ? "0" : "1") + '"');
+    var st = n && n.status ? n.status() : null;
+    if (st && st.nws) {
+      h += '<div class="sec">National Weather Service</div><div class="row static"><div class="t">' + (st.nws.ok ? "Working" : "Can't reach weather.gov") +
+        "<small>Last checked " + esc(new Date(st.nws.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })) + '</small></div><div class="r">' + (st.nws.ok ? st.nws.count + " active" : "") + "</div></div>";
+    }
+    h += '<div class="sec">Test</div><div class="btns">' +
+      '<div class="bt" role="button" data-a="ntest"><ha-icon icon="mdi:bell-ring-outline"></ha-icon>Show a test alert here</div>' +
+      '<div class="bt" role="button" data-a="nreset"><ha-icon icon="mdi:restore"></ha-icon>Show dismissed alerts again</div></div>' +
+      '<div class="note">The test alert only appears on this display and doesn\'t chime.</div>';
+    return h;
+  };
+
+  EchoShowSettings.prototype._tab_about = function () {
+    var self = this, h = "";
+    function kv(k, v, cls) { return v === null || v === undefined || v === "" ? "" : '<div class="kv"><span>' + esc(k) + '</span><span class="' + (cls || "") + '">' + esc(v) + "</span></div>"; }
+    function sv(suffix, dom, fmt) { var id = self._dev(dom || "sensor", suffix), s = self._st(id); return s && s.state !== "unknown" && s.state !== "unavailable" ? (fmt ? fmt(s) : s.state) : null; }
+    h += '<div class="sec">This display</div><div class="info">';
+    h += kv("Name", this._name || "Unknown");
+    h += kv("Linked as", this._device || "Not linked");
+    if (this._device) {
+      h += kv("IP address", sv("ipv4_address"));
+      h += kv("Battery", sv("battery", "sensor", function (s) { return Math.round(num(s.state)) + "%"; }));
+      h += kv("CPU temperature", sv("cpu_temperature", "sensor", function (s) { return Math.round(num(s.state)) + (s.attributes.unit_of_measurement || "°"); }));
+      h += kv("Memory free", sv("ram_available", "sensor", function (s) { return Math.round(num(s.state)) + " MB"; }));
+      h += kv("Android", sv("android_version"));
+      var up = this._st(this._dev("update", "update"));
+      if (up) {
+        h += kv("Kiosk Satellite", up.attributes.installed_version);
+        if (up.state === "on") h += kv("Update available", up.attributes.latest_version, "upd");
+      }
+    }
+    h += "</div>";
+    var esd = window.EchoShowDashboard;
+    h += '<div class="sec">Dashboard</div><div class="info">' + kv("Echo Show Dashboard", esd ? esd.version : VERSION);
+    if (esd && esd.cards) esd.cards.forEach(function (c) { var p = c.split(" "); h += kv(p[0], p[1]); });
+    h += "</div>";
+    if (this._device) {
+      var cc = this._dev("button", "clear_cache"), ra = this._dev("button", "restart_app");
+      h += '<div class="sec">Maintenance</div><div class="btns">';
+      h += '<div class="bt" role="button" data-a="reload"><ha-icon icon="mdi:refresh"></ha-icon>Reload page</div>';
+      if (cc) h += '<div class="bt" role="button" data-a="press" data-id="' + esc(cc) + '"><ha-icon icon="mdi:broom"></ha-icon>Clear cache</div>';
+      if (ra) h += '<div class="bt" role="button" data-a="press" data-id="' + esc(ra) + '"><ha-icon icon="mdi:restart"></ha-icon>Restart app</div>';
+      h += "</div>";
+    } else {
+      h += '<div class="sec">Maintenance</div><div class="btns"><div class="bt" role="button" data-a="reload"><ha-icon icon="mdi:refresh"></ha-icon>Reload page</div></div>';
+    }
+    return h;
+  };
+
+  // --- values ---
+  EchoShowSettings.prototype._numVal = function (id) {
+    if (this._local[id] && this._local[id].until > Date.now()) return this._local[id].v;
+    var s = this._st(id), v = s ? num(s.state) : null;
+    return v === null ? 0 : v;
+  };
+  EchoShowSettings.prototype._selVal = function (id) {
+    if (this._local[id] && this._local[id].until > Date.now()) return this._local[id].v;
+    var s = this._st(id);
+    return s ? s.state : "";
+  };
+  EchoShowSettings.prototype._hold = function (id, v) { this._local[id] = { v: v, until: Date.now() + 4000 }; };
+
+  // --- actions ---
+  EchoShowSettings.prototype._act = function (a, el) {
+    var h = this._hass, id = el.getAttribute("data-id"), v = el.getAttribute("data-v"), k = el.getAttribute("data-k");
+    if (a === "toggle" && id) {
+      var on = this._isOn(id);
+      this._hold(id, on ? "off" : "on");
+      h.callService(id.split(".")[0] === "light" ? "light" : "switch", on ? "turn_off" : "turn_on", { entity_id: id });
+    } else if (a === "select" && id) {
+      this._hold(id, v);
+      h.callService("select", "select_option", { entity_id: id, option: v });
+    } else if (a === "number" && id) {
+      this._hold(id, parseFloat(v));
+      h.callService("number", "set_value", { entity_id: id, value: parseFloat(v) });
+    } else if (a === "press" && id) {
+      h.callService("button", "press", { entity_id: id });
+    } else if (a === "reload") {
+      var rl = this._device ? this._dev("button", "reload_page") : null;
+      if (rl) h.callService("button", "press", { entity_id: rl }); else window.location.reload();
+    } else if (a === "pref") {
+      Prefs.set(k, v);
+    } else if (a === "prefbool") {
+      Prefs.set(k, v === "1");
+    } else if (a === "wsource") {
+      try { window.localStorage.setItem(k, v); } catch (e) { /* ignore */ }
+      window.dispatchEvent(new CustomEvent("echo-show-prefs", { detail: { key: "weather_source", value: parseInt(v, 10) } }));
+    } else if (a === "mroom") {
+      Prefs.set("media_room", v || "");
+    } else if (a === "ntest") {
+      if (window.echoNotify) {
+        this.close();
+        window.echoNotify.show({ title: "Test alert", kicker: "Echo Show Dashboard", severity: "moderate", sound: false, message: "This is what an alert looks like on this display.\n\nTap Dismiss to close it." });
+      }
+      return;
+    } else if (a === "nreset") {
+      if (window.echoNotify) window.echoNotify.resetDismissed();
+    } else if (a === "clean") {
+      this._clean();
+      return;
+    }
+    this._refresh(true);
+  };
+
+  EchoShowSettings.prototype._slide = function (x) {
+    var d = this._drag, tr = d.el, r = tr.getBoundingClientRect();
+    var min = parseFloat(tr.getAttribute("data-min")), max = parseFloat(tr.getAttribute("data-max"));
+    var f = clamp((x - r.left) / r.width, 0, 1);
+    var v = Math.round((min + f * (max - min)) / 5) * 5;
+    d.v = v;
+    tr.querySelector(".fill").style.transform = "scaleX(" + ((v - min) / (max - min)).toFixed(3) + ")";
+    tr.querySelector(".v").textContent = v + tr.getAttribute("data-unit");
+  };
+  EchoShowSettings.prototype._commitSlide = function () {
+    var d = this._drag, kind = d.el.getAttribute("data-kind");
+    if (d.v === undefined) return;
+    this._hold(d.id, d.v);
+    if (kind === "light") {
+      if (d.v <= 0) this._hass.callService("light", "turn_on", { entity_id: d.id, brightness: 1 });
+      else this._hass.callService("light", "turn_on", { entity_id: d.id, brightness_pct: d.v });
+    } else {
+      this._hass.callService("number", "set_value", { entity_id: d.id, value: d.v });
+    }
+  };
+
+  // Cleaning mode: black screen that swallows touches for 30 s.
+  EchoShowSettings.prototype._clean = function () {
+    var self = this, el = document.createElement("div"), left = 30;
+    el.className = "clean";
+    el.innerHTML = '<ha-icon icon="mdi:spray-bottle"></ha-icon><div class="big">30</div><div class="sm">Touch is off while you clean the screen</div>';
+    this.shadowRoot.appendChild(el);
+    var big = el.querySelector(".big");
+    var t = setInterval(function () {
+      left--;
+      big.textContent = left;
+      if (left <= 0) { clearInterval(t); el.remove(); self.close(); }
+    }, 1000);
+  };
+
+  EchoShowSettings.prototype.close = function () {
+    if (this._alarmEl && this._alarmEl._putBack) this._alarmEl._putBack();
+    if (window.EchoAlarmSound && window.EchoAlarmSound.hush) window.EchoAlarmSound.hush();
+    this._alarmEl = null;
+    if (this.parentNode) this.parentNode.removeChild(this);
+    current = null;
+    if (this.onclose) this.onclose();
+  };
+
+  if (!customElements.get("echo-show-settings")) customElements.define("echo-show-settings", EchoShowSettings);
+
+  var current = null;
+  // Open the settings panel from a card. ctx: { tab, timers: [timer ids] }.
+  function openSettings(card, ctx) {
+    if (current) return current;
+    var el = document.createElement("echo-show-settings");
+    current = el;
+    el.onclose = function () { if (card) card._settingsEl = null; };
+    el.open(card._hass, ctx);
+    if (card) card._settingsEl = el;
+    return el;
+  }
+
+  // ---------- timer overlay ----------
+  // A big countdown floating over the weather / media pages while timers run. The card
+  // puts one inside its root element and calls update(hass, [timer ids]) on changes.
+
+  var OV_STYLE = [
+    ":host{position:absolute;z-index:6;display:block;pointer-events:auto;font-family:var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif);color:#fff;-webkit-tap-highlight-color:transparent;}",
+    ":host([hidden]){display:none;}",
+    ":host(.top-right){top:2.4vh;right:2.6vh;}",
+    ":host(.top-left){top:2.4vh;left:2.6vh;}",
+    ":host(.bottom-right){bottom:13.5vh;right:2.6vh;}",
+    ":host(.bottom-left){bottom:13.5vh;left:2.6vh;}",
+    ":host(.media){top:11vh;left:1.4vh;}",
+    ".box{min-width:27vw;max-width:34vw;background:rgba(8,12,26,.84);border:1px solid rgba(255,255,255,.14);border-radius:2.8vh;box-shadow:0 1.6vh 4vh rgba(0,0,0,.5);padding:1vh 2.2vh;box-sizing:border-box;cursor:pointer;}",
+    ".t{display:flex;align-items:center;padding:1vh 0;}",
+    ".t + .t{border-top:1px solid rgba(255,255,255,.1);}",
+    ".ring{flex:0 0 auto;width:7vh;height:7vh;margin-right:1.8vh;}",
+    ".ring circle{fill:none;stroke-width:9;}",
+    ".tx{flex:1 1 auto;min-width:0;}",
+    ".nm{font-size:2.6vh;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    ".tm{font-size:6.4vh;line-height:1.05;font-weight:400;font-variant-numeric:tabular-nums;letter-spacing:.01em;}",
+    ".t.paused .tm{opacity:.55;}",
+    ".t.done .tm{color:#ff6b61;animation:eto-blink 1s steps(1) infinite;}",
+    ".t.done .nm{color:#ff8a80;opacity:1;}",
+    "@keyframes eto-blink{50%{opacity:.3;}}",
+  ].join("");
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.ceil(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    var ss = (s < 10 ? "0" : "") + s;
+    return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m + ":" + ss : m + ":" + ss;
+  }
+  function parseDur(s) {
+    if (s === undefined || s === null) return 0;
+    var days = 0, m = String(s).match(/^(\d+) days?, (.*)$/);
+    if (m) { days = parseInt(m[1], 10); s = m[2]; }
+    var p = String(s).split(":");
+    if (p.length !== 3) return 0;
+    return days * 86400 + parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
+  }
+
+  function EchoTimerOverlay() {
+    var self = Reflect.construct(HTMLElement, [], EchoTimerOverlay);
+    self._items = [];
+    return self;
+  }
+  EchoTimerOverlay.prototype = Object.create(HTMLElement.prototype);
+  EchoTimerOverlay.prototype.constructor = EchoTimerOverlay;
+  Object.setPrototypeOf(EchoTimerOverlay, HTMLElement);
+
+  EchoTimerOverlay.prototype.connectedCallback = function () {
+    var self = this;
+    if (!this.shadowRoot) {
+      var root = this.attachShadow({ mode: "open" });
+      root.innerHTML = "<style>" + OV_STYLE + '</style><div class="box" role="button"></div>';
+      this._box = root.querySelector(".box");
+      this._box.addEventListener("click", function (ev) { ev.stopPropagation(); if (self.path) navigate(self.path); });
+      this._onPrefs = function () { self._place(); self._paint(); };
+    }
+    window.addEventListener("echo-show-prefs", this._onPrefs);
+    this._place();
+  };
+  EchoTimerOverlay.prototype.disconnectedCallback = function () {
+    window.removeEventListener("echo-show-prefs", this._onPrefs);
+    if (this._tick) { clearInterval(this._tick); this._tick = null; }
+  };
+  // "auto" lets each page pick a spot that doesn't cover its controls (attribute auto-pos).
+  EchoTimerOverlay.prototype._place = function () {
+    var pos = Prefs.get("overlay");
+    if (pos === "auto" || !pos) pos = this.getAttribute("auto-pos") || "top-right";
+    ["top-right", "top-left", "bottom-right", "bottom-left", "media"].forEach(function (c) { this.classList.toggle(c, c === pos); }, this);
+  };
+
+  // timers: [timer ids]; each may have input_text.<id>_name with its label.
+  EchoTimerOverlay.prototype.update = function (hass, timers) {
+    var st = hass.states, items = [];
+    (timers || []).forEach(function (id) {
+      var t = st[id];
+      if (!t) return;
+      var nmE = st["input_text." + id.split(".")[1] + "_name"];
+      var nm = nmE && nmE.state && nmE.state !== "unknown" && nmE.state !== "unavailable" ? nmE.state : "";
+      var dur = parseDur(t.attributes.duration);
+      if (t.state === "active" && t.attributes.finishes_at) items.push({ s: "active", n: nm || "Timer", end: Date.parse(t.attributes.finishes_at), dur: dur });
+      else if (t.state === "paused") items.push({ s: "paused", n: nm || "Timer", rem: parseDur(t.attributes.remaining), dur: dur });
+      else if (t.state === "idle" && nm) items.push({ s: "done", n: nm, dur: dur });
+    });
+    var order = { done: 0, active: 1, paused: 2 };
+    items.sort(function (a, b) { return (order[a.s] - order[b.s]) || ((a.end || 0) - (b.end || 0)); });
+    this._items = items;
+    this._paint();
+    var self = this, live = items.some(function (i) { return i.s === "active"; });
+    if (live && !this._tick) this._tick = setInterval(function () { self._paint(); }, 1000);
+    if (!live && this._tick) { clearInterval(this._tick); this._tick = null; }
+  };
+
+  EchoTimerOverlay.prototype._paint = function () {
+    if (!this._box) return;
+    var show = this._items.length && Prefs.get("overlay") !== "off";
+    if (!show) { this.setAttribute("hidden", ""); return; }
+    this.removeAttribute("hidden");
+    var h = "", now = Date.now();
+    var R = 40, C = 2 * Math.PI * R;
+    this._items.forEach(function (it) {
+      var rem = it.s === "active" ? (it.end - now) / 1000 : it.s === "paused" ? it.rem : 0;
+      var f = it.dur > 0 ? clamp(rem / it.dur, 0, 1) : 0;
+      var col = it.s === "done" ? "#ff6b61" : it.s === "paused" ? "rgba(255,255,255,.45)" : "#ffb340";
+      h += '<div class="t ' + it.s + '"><svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="' + R + '" stroke="rgba(255,255,255,.14)"/>' +
+        '<circle cx="50" cy="50" r="' + R + '" stroke="' + col + '" stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + (C * (1 - (it.s === "done" ? 1 : f))).toFixed(1) + '" transform="rotate(-90 50 50)"/></svg>' +
+        '<div class="tx"><div class="nm">' + esc(it.s === "paused" ? it.n + " · paused" : it.s === "done" ? it.n + " · done" : it.n) + '</div><div class="tm">' + (it.s === "done" ? "Done" : fmtClock(rem)) + "</div></div></div>";
+    });
+    if (h !== this._last) { this._box.innerHTML = h; this._last = h; }
+  };
+
+  if (!customElements.get("echo-timer-overlay")) customElements.define("echo-timer-overlay", EchoTimerOverlay);
+
+  // ---------- public API ----------
+  window.EchoShow = {
+    version: VERSION,
+    prefs: Prefs,
+    openSettings: openSettings,
+    settingsOpen: function () { return !!current; },
+    displayName: echoDisplayName,
+    mediaStatus: null,            // set by echo-media-card
+  };
+  if (window.console && console.info) console.info("echo-show-common " + VERSION);
+})();
 
 /* ===== echo-weather-card.js ===== */
 /*
@@ -19,7 +859,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.5.0";
+  var VERSION = "1.6.0";
 
 
   // ---------- which display is this? ----------
@@ -491,6 +1331,7 @@
       this._ensureSubscriptions();
       this._update();
       this._updateBadges();
+      this._updateOverlay();
       if (this._settingsEl) this._settingsEl.hass = hass;
     },
     get: function () {
@@ -503,6 +1344,15 @@
       this._ensureSubscriptions();
     }
     var self = this;
+    // Settings panel changes (source, animations, hourly wind).
+    if (!this._onPrefs) this._onPrefs = function (ev) {
+      if (!self._config || !self._built) return;
+      if (ev.detail && ev.detail.key === "weather_source") { self._sourceIndex = self._loadSource(); self._ensureSubscriptions(); }
+      self._sig = ""; self._fxSig = ""; self._chartSig = "";
+      self._update();
+      self._renderChart();
+    };
+    window.addEventListener("echo-show-prefs", this._onPrefs);
     if (window.ResizeObserver && this._built && !this._ro) {
       this._ro = new ResizeObserver(function () { self._chartSig = ""; self._renderChart(); });
       this._ro.observe(this._fcEl);
@@ -510,6 +1360,7 @@
   };
 
   EchoWeatherCard.prototype.disconnectedCallback = function () {
+    if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
     this._unsubscribe();
     if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
     if (this._settingsEl) this._settingsEl.close();
@@ -541,10 +1392,12 @@
       '<div class="fc" role="button"><div class="scroller"></div><div class="mode"></div></div>' +
       (buttons.length ? '<div class="btns">' + btnHtml + "</div>" : "") +
       "</div>" +
+      '<echo-timer-overlay hidden auto-pos="top-right"></echo-timer-overlay>' +
       '<div class="pop hidden"></div>' +
       "</div>";
 
     this._rootEl = root.querySelector(".root");
+    this._ovEl = root.querySelector("echo-timer-overlay");
     this._bgEl = root.querySelector(".bg");
     this._fxEl = root.querySelector(".fx");
     this._nowEl = root.querySelector(".now");
@@ -594,9 +1447,10 @@
 
   EchoWeatherCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
-    if (btn.action === "timer-settings") {
-      // The popup lives in echo-timer-card.js (loaded as its own resource).
-      if (window.EchoAlarmSettingsOpen) window.EchoAlarmSettingsOpen(this, this._rootEl, btn.settings);
+    if (btn.action === "settings" || btn.action === "timer-settings") {
+      // Shared settings panel (echo-show-common); the old timer-only popup otherwise.
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      else if (window.EchoAlarmSettingsOpen) window.EchoAlarmSettingsOpen(this, this._rootEl, btn.settings);
     } else if (btn.navigation_path) {
       window.history.pushState(null, "", btn.navigation_path);
       var ev = new Event("location-changed", { bubbles: true, composed: true });
@@ -683,6 +1537,20 @@
     var self = this;
     if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
     if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+  };
+
+  // The big countdown over this page (echo-show-common's <echo-timer-overlay>).
+  EchoWeatherCard.prototype._overlayTimers = function () {
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
+    return [];
+  };
+  EchoWeatherCard.prototype._updateOverlay = function () {
+    var el = this._ovEl;
+    if (!el || !el.update) return;
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
+    el.update(this._hass, this._overlayTimers());
   };
 
   EchoWeatherCard.prototype._paintBadges = function () {
@@ -851,7 +1719,8 @@
     var c = cur.condition;
     var wet = WET.indexOf(c) !== -1;
     var cloudyish = c === "cloudy" || c === "partlycloudy" || c === "windy-variant";
-    var anim = this._config.animations !== false;
+    var pAnim = window.EchoShow ? window.EchoShow.prefs.get("weather_animations") : null;
+    var anim = pAnim !== null && pAnim !== undefined ? !!pAnim : this._config.animations !== false;
 
     var moonSt = this._state(this._config.moon);
     var illum = 0.5, waxing = true;
@@ -1013,10 +1882,13 @@
     for (var i = 0; i < list.length; i += g) {
       var grp = list.slice(i, i + g);
       var d = new Date(grp[0].datetime);
-      var t = 0, tn = 0, p = null, q = null;
+      var t = 0, tn = 0, p = null, q = null, ws = 0, wn = 0, ux = 0, uy = 0;
       grp.forEach(function (f) {
         var v = num(f.temperature);
         if (v !== null) { t += v; tn++; }
+        var w = num(f.wind_speed), wb = num(f.wind_bearing);
+        if (w !== null) { ws += w; wn++; }
+        if (wb !== null) { var wr = wb * Math.PI / 180, wwt = w === null ? 1 : Math.max(w, 0.1); ux += Math.sin(wr) * wwt; uy += Math.cos(wr) * wwt; }
         var pv = num(f.precipitation);
         if (pv !== null) p = (p || 0) + pv;
         var qv = num(f.precipitation_probability);
@@ -1036,6 +1908,8 @@
         lo: null,
         precip: p,
         prob: q,
+        wind: wn ? ws / wn : null,
+        bearing: ux || uy ? (Math.atan2(ux, uy) * 180 / Math.PI + 360) % 360 : null,
       });
       lastDay = dk;
     }
@@ -1076,7 +1950,7 @@
     var ent = this._forecastEntity();
     var shadowOn = this._rootEl.classList.contains("shadow");
     var sig = [this._mode, W, H, ent, shadowOn, data.length,
-      JSON.stringify(data.map(function (d) { return [d.hi, d.lo, d.precip, d.prob, d.condition, d.top]; }))].join("|");
+      JSON.stringify(data.map(function (d) { return [d.hi, d.lo, d.precip, d.prob, d.condition, d.top, d.wind, d.bearing]; }))].join("|");
     if (sig === this._chartSig) return;
     this._chartSig = sig;
 
@@ -1104,8 +1978,12 @@
     var barBottom = yPrecipText - fs * 1.05;
     var barBand = 4.5 * vh;
     var barTop = barBottom - barBand;
+    // Hourly view: a wind row (direction arrow + speed) between the lines and the rain bars.
+    var pWind = window.EchoShow ? window.EchoShow.prefs.get("weather_wind") : true;
+    var showWind = this._mode === "hourly" && pWind !== false && data.some(function (d) { return d.wind !== null && d.wind !== undefined; });
+    var wFs = 2.9 * vh, yWind = barTop - 1.4 * vh;
     var lineTop = chartTop + fs * 1.3;
-    var lineBottom = barTop - fs * 1.35;
+    var lineBottom = (showWind ? yWind - wFs * 1.25 : barTop) - fs * 1.35;
     if (lineBottom - lineTop < 4 * vh) lineBottom = lineTop + 4 * vh;
 
     var his = data.map(function (d) { return d.hi; });
@@ -1126,6 +2004,10 @@
     s += '<defs><linearGradient id="ewcHi" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + totalW + '" y2="0">';
     for (var i = 0; i < n; i++) {
       if (his[i] !== null) s += '<stop offset="' + (xs[i] / totalW).toFixed(4) + '" stop-color="' + tempColor(toFf(his[i])) + '"/>';
+    }
+    s += '</linearGradient><linearGradient id="ewcLo" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + totalW + '" y2="0">';
+    for (i = 0; i < n; i++) {
+      if (los[i] !== null) s += '<stop offset="' + (xs[i] / totalW).toFixed(4) + '" stop-color="' + tempColor(toFf(los[i])) + '"/>';
     }
     s += '</linearGradient><filter id="ewcTs" x="-20%" y="-40%" width="140%" height="180%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#000" flood-opacity="0.85"/></filter></defs>';
 
@@ -1169,7 +2051,7 @@
     });
     var loSegs = segments(los, xs, yOf);
     loSegs.forEach(function (seg) {
-      s += '<path d="' + smoothPath(seg) + '" fill="none" stroke="rgba(255,245,170,0.9)" stroke-width="' + (0.45 * vh) + '" stroke-dasharray="' + (0.5 * vh) + " " + (0.7 * vh) + '" stroke-linecap="round"/>';
+      s += '<path d="' + smoothPath(seg) + '" fill="none" stroke="url(#ewcLo)" stroke-width="' + (0.45 * vh) + '" stroke-linecap="round"/>';
     });
 
     // points + labels
@@ -1181,8 +2063,27 @@
       }
       if (los[i] !== null) {
         var yl = yOf(los[i]);
-        s += '<circle cx="' + xs[i] + '" cy="' + yl + '" r="' + (0.55 * vh) + '" fill="rgba(255,245,170,0.95)"/>';
+        s += '<circle cx="' + xs[i] + '" cy="' + yl + '" r="' + (0.55 * vh) + '" fill="' + tempColor(toFf(los[i])) + '"/>';
         t += '<text x="' + xs[i] + '" y="' + (yl + fs * 1.05) + '" text-anchor="middle" font-size="' + fs + '" fill="rgba(255,255,255,0.85)">' + Math.round(los[i]) + "°</text>";
+      }
+    }
+
+    if (showWind) {
+      var wUnit = st ? st.attributes.wind_speed_unit || "mph" : "mph";
+      var aS = 2.6 * vh;
+      for (i = 0; i < n; i++) {
+        var wd = data[i];
+        if (wd.wind === null || wd.wind === undefined) continue;
+        var spd = String(Math.round(wd.wind));
+        var tw = (spd.length * 0.56 + 0.4) * wFs + wUnit.length * 0.5 * wFs * 0.7;
+        var ax = xs[i] - tw / 2 - aS * 0.45, ay = yWind - wFs * 0.35;
+        if (wd.bearing !== null && wd.bearing !== undefined) {
+          // Arrow points the way the wind blows (bearing is where it comes from).
+          s += '<g transform="translate(' + ax.toFixed(1) + " " + ay.toFixed(1) + ") rotate(" + ((wd.bearing + 180) % 360).toFixed(0) + ')">' +
+            '<path d="M0 ' + (-aS / 2) + " L" + (aS * 0.38) + " " + (aS / 2) + " L0 " + (aS * 0.24) + " L" + (-aS * 0.38) + " " + (aS / 2) + ' Z" fill="#9be7ff"/></g>';
+        }
+        t += '<text x="' + (xs[i] + aS * 0.35) + '" y="' + yWind + '" text-anchor="middle" font-size="' + wFs + '" fill="#cdeffd">' + esc(spd) +
+          '<tspan font-size="' + (wFs * 0.7) + '" fill="rgba(205,239,253,.75)"> ' + esc(wUnit) + "</tspan></text>";
       }
     }
 
@@ -1260,7 +2161,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.0";
+  var VERSION = "1.7.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -1482,6 +2383,9 @@
     ".tone:active,.test:active,.done:active{transform:scale(.96);}",
     ".dev{margin-top:2vh;text-align:center;font-size:2.4vh;opacity:.45;}",
   ].join("");
+  // Inside the shared settings panel: no backdrop, frame or header of its own.
+  var SET_EMBED = ":host{position:static;display:block;background:none;z-index:auto;}.bd,.hd,.dev{display:none;}" +
+    ".panel{width:auto;background:none;border:none;box-shadow:none;padding:0;border-radius:0;}";
 
   function EchoAlarmSettings() {
     var self = Reflect.construct(HTMLElement, [], EchoAlarmSettings);
@@ -1518,7 +2422,7 @@
     var root = this.attachShadow({ mode: "open" });
     var tones = "";
     for (var i = 0; i < Sound.names.length; i++) tones += '<div class="tone" role="button" data-t="' + esc(Sound.names[i]) + '">' + esc(Sound.names[i]) + "</div>";
-    root.innerHTML = "<style>" + SET_STYLE + "</style>" +
+    root.innerHTML = "<style>" + SET_STYLE + (this.embedded ? SET_EMBED : "") + "</style>" +
       '<div class="bd"></div><div class="panel"><div class="hd"><h2>Timer alarm</h2><div class="done" role="button">Done</div></div>' +
       '<div class="lbl"><span>Volume</span><span class="vv"></span></div>' +
       '<div class="vrow"><ha-icon icon="mdi:volume-low"></ha-icon><div class="track"><div class="fill"></div></div><ha-icon icon="mdi:volume-high"></ha-icon></div>' +
@@ -1533,7 +2437,7 @@
     echoDisplayName().then(function (name) { if (name) devEl.textContent = "This display: " + name; });
     // Keep touch gestures inside this card: stops the kiosk's swipe-between-views from
     // firing while dragging sliders (and on this page generally).
-    ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
+    if (!this.embedded) ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
       self.addEventListener(type, function (ev) { ev.stopPropagation(); });
     });
 
@@ -1966,12 +2870,14 @@
         var i = parseInt(ev.currentTarget.getAttribute("data-i"), 10);
         var btn = buttons[i];
         if (!btn) return;
-        if (btn.action === "timer-settings") {
+        if (btn.action === "settings" || btn.action === "timer-settings") {
           var sc = {}, k;
           for (k in (btn.settings || {})) sc[k] = btn.settings[k];
           for (k in (self._config.settings || {})) sc[k] = self._config.settings[k];
           sc.timers = self._config.slots.map(function (s) { return s.timer; });
-          window.EchoAlarmSettingsOpen(self, root.querySelector(".root"), sc);
+          // The shared settings panel (echo-show-common); the old timer-only popup otherwise.
+          if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { timers: sc.timers, alarm: sc });
+          else window.EchoAlarmSettingsOpen(self, root.querySelector(".root"), sc);
         } else if (btn.navigation_path) {
           navigate(btn.navigation_path);
         } else if (btn.url) {
@@ -2348,7 +3254,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.0";
+  var VERSION = "1.8.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -2455,8 +3361,8 @@
     ".ib ha-icon{--mdc-icon-size:4vh;width:4vh;height:4vh;}",
     ".ib.plain{background:none;border-color:transparent;}",
     /* meta */
-    ".meta{display:flex;flex-direction:column;min-width:0;}",
-    ".src{font-size:2.3vh;letter-spacing:.14em;text-transform:uppercase;opacity:.55;margin-bottom:1.2vh;display:flex;align-items:center;}",
+    ".meta{display:flex;flex-direction:column;align-items:center;text-align:center;min-width:0;}",
+    ".src{font-size:2.3vh;letter-spacing:.14em;text-transform:uppercase;opacity:.55;margin-bottom:1.2vh;display:flex;align-items:center;justify-content:center;}",
     ".src ha-icon{--mdc-icon-size:2.6vh;width:2.6vh;height:2.6vh;margin-right:.8vh;}",
     ".src:empty{display:none;}",
     ".ttl{font-size:5.6vh;font-weight:500;line-height:1.14;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}",
@@ -2856,6 +3762,7 @@
 
   // Card config plus the matching per-display overrides.
   EchoMediaCard.prototype._applyProfile = function (prof) {
+    this._prof = prof;
     var c = {}, k;
     for (k in this._raw) c[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") c[k] = prof[k];
@@ -2886,6 +3793,13 @@
       ma_urls: c.ma_url ? [].concat(c.ma_url) : [],
       ma_token: c.ma_token || null,
     };
+    // This display's choices from the settings panel.
+    var P = window.EchoShow ? window.EchoShow.prefs : null;
+    if (P) {
+      var room = P.get("media_room"), fol = P.get("media_follow");
+      if (room !== null && room !== undefined) this._config.default_player = room || null;
+      if (fol !== null && fol !== undefined) this._config.follow_playing = !!fol;
+    }
   };
 
   EchoMediaCard.prototype.getCardSize = function () { return 12; };
@@ -2903,10 +3817,20 @@
   });
 
   EchoMediaCard.prototype.connectedCallback = function () {
+    var self = this;
+    if (!this._onPrefs) this._onPrefs = function (ev) {
+      var k = ev.detail && ev.detail.key;
+      if (k !== "media_room" && k !== "media_follow") return;
+      self._applyProfile(self._prof || null);
+      if (!self._manual) self._sel = -1;
+      if (self._built && self._hass) self._update(true);
+    };
+    window.addEventListener("echo-show-prefs", this._onPrefs);
     if (this._built) { this._startIdle(); this._update(true); }
   };
 
   EchoMediaCard.prototype.disconnectedCallback = function () {
+    if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
     this._stopIdle();
     this._stopTick();
     if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
@@ -3111,6 +4035,8 @@
       '<div class="go" role="button" data-act="browse"><ha-icon icon="mdi:music-box-multiple-outline"></ha-icon>Browse music</div></div>' +
       '<div class="qf"></div></div>' +
       // overlays
+      // timer countdown: below the panels (z-index 5), so browse / speakers / queue cover it
+      '<echo-timer-overlay hidden auto-pos="media" style="z-index:4"></echo-timer-overlay>' +
       '<div class="ov browse hidden"></div>' +
       '<div class="ov spk hidden"></div>' +
       '<div class="ov queue hidden"></div>' +
@@ -3127,6 +4053,7 @@
     this._brEl = root.querySelector(".ov.browse");
     this._spEl = root.querySelector(".ov.spk");
     this._quEl = root.querySelector(".ov.queue");
+    this._ovEl = root.querySelector("echo-timer-overlay");
     this._toastEl = root.querySelector(".toast");
     var self = this;
 
@@ -3198,7 +4125,9 @@
 
   EchoMediaCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
-    if (btn.action === "timer-settings") {
+    if ((btn.action === "settings" || btn.action === "timer-settings") && window.EchoShow && window.EchoShow.openSettings) {
+      window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+    } else if (btn.action === "timer-settings") {
       if (!window.EchoAlarmSettingsOpen) return; // provided by echo-timer-card.js
       var sc = {}, k;
       for (k in (btn.settings || {})) sc[k] = btn.settings[k];
@@ -3228,6 +4157,7 @@
     if (force && !this._manual) this._sel = -1;
     if (changed) this._paint();
     this._updateBadges();
+    this._updateOverlay();
   };
 
   EchoMediaCard.prototype._paint = function () {
@@ -3802,6 +4732,10 @@
     if (this._maOff) return;
     var mc = this._ma(), self = this;
     if (!mc) return;
+    if (window.EchoShow) window.EchoShow.mediaStatus = function () {
+      return mc.state === "ready" ? { label: "Connected", detail: "Connected to " + mc.base }
+        : { label: mc.state === "down" ? "Not connected" : "Connecting", detail: mc.error || "Connecting to Music Assistant…" };
+    };
     this._maOff = mc.on(function (qid) {
       if (!self._quEl || self._quEl.classList.contains("hidden")) return;
       if (qid && qid !== self._maQueueRef(self._coord()).qid) return;
@@ -4570,6 +5504,21 @@
     if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
   };
 
+  // The big countdown over this page (echo-show-common's <echo-timer-overlay>). Hidden
+  // while a panel (browse / speakers / queue) is open.
+  EchoMediaCard.prototype._overlayTimers = function () {
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
+    return [];
+  };
+  EchoMediaCard.prototype._updateOverlay = function () {
+    var el = this._ovEl;
+    if (!el || !el.update) return;
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
+    el.update(this._hass, this._overlayTimers());
+  };
+
   EchoMediaCard.prototype._paintBadges = function () {
     var info = this._badges || [];
     for (var i = 0; i < info.length; i++) {
@@ -4618,7 +5567,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.0";
+  var VERSION = "1.1.0";
   if (window.echoNotify && window.echoNotify.version) return;  // loaded twice
 
   var LS_DISMISSED = "echo-notify-dismissed";
@@ -4985,6 +5934,12 @@
     return list;
   };
 
+  // Chime on this display? The settings panel's per-display choice wins over the config.
+  Manager.prototype._sound = function () {
+    var p = window.EchoShow ? window.EchoShow.prefs.get("notify_sound") : null;
+    return p !== null && p !== undefined ? !!p : !!(this.cfg && this.cfg.sound);
+  };
+
   Manager.prototype._paint = function () {
     var q = this.cfg ? this._queue() : [];
     if (!q.length) { this.overlay.hide(); this._stopRepeat(); return; }
@@ -4992,14 +5947,14 @@
     this.overlay.render(top, 1, q.length);
     if (!this._seen[top.key]) {
       this._seen[top.key] = true;
-      if (this.cfg.sound && top.sound !== false) Chime.play(SEV[top.severity].rank);
+      if (this._sound() && top.sound !== false) Chime.play(SEV[top.severity].rank);
       this._startRepeat(top);
     }
   };
   Manager.prototype._startRepeat = function (n) {
     this._stopRepeat();
     var every = Number(this.cfg.sound_repeat) || 0;
-    if (!every || !this.cfg.sound || SEV[n.severity].rank < 3) return;
+    if (!every || !this._sound() || n.sound === false || SEV[n.severity].rank < 3) return;
     var self = this;
     this._repeatT = setInterval(function () {
       var q = self._queue();
@@ -5188,6 +6143,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.0.0", cards: ["echo-weather-card 1.5.0","echo-timer-card 1.6.0","echo-media-card 1.7.0","echo-notify 1.0.0"] };
-  console.info("%c Echo Show Dashboard 1.0.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.1.0", cards: ["echo-show-common 1.1.0","echo-weather-card 1.6.0","echo-timer-card 1.7.0","echo-media-card 1.8.0","echo-notify 1.1.0"] };
+  console.info("%c Echo Show Dashboard 1.1.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

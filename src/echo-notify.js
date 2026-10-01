@@ -23,7 +23,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.0";
+  var VERSION = "1.1.0";
   if (window.echoNotify && window.echoNotify.version) return;  // loaded twice
 
   var LS_DISMISSED = "echo-notify-dismissed";
@@ -390,6 +390,12 @@
     return list;
   };
 
+  // Chime on this display? The settings panel's per-display choice wins over the config.
+  Manager.prototype._sound = function () {
+    var p = window.EchoShow ? window.EchoShow.prefs.get("notify_sound") : null;
+    return p !== null && p !== undefined ? !!p : !!(this.cfg && this.cfg.sound);
+  };
+
   Manager.prototype._paint = function () {
     var q = this.cfg ? this._queue() : [];
     if (!q.length) { this.overlay.hide(); this._stopRepeat(); return; }
@@ -397,14 +403,14 @@
     this.overlay.render(top, 1, q.length);
     if (!this._seen[top.key]) {
       this._seen[top.key] = true;
-      if (this.cfg.sound && top.sound !== false) Chime.play(SEV[top.severity].rank);
+      if (this._sound() && top.sound !== false) Chime.play(SEV[top.severity].rank);
       this._startRepeat(top);
     }
   };
   Manager.prototype._startRepeat = function (n) {
     this._stopRepeat();
     var every = Number(this.cfg.sound_repeat) || 0;
-    if (!every || !this.cfg.sound || SEV[n.severity].rank < 3) return;
+    if (!every || !this._sound() || n.sound === false || SEV[n.severity].rank < 3) return;
     var self = this;
     this._repeatT = setInterval(function () {
       var q = self._queue();

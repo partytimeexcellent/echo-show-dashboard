@@ -8,6 +8,7 @@ Full-screen Home Assistant dashboard cards for an **Echo Show 8** (or any 1280×
 | **Timers** (`echo-timer-card`) | Three named timers with countdown rings, pause/resume, drag-to-adjust and a slide-to-start control. Rings in the browser with a choice of tones; works with voice commands. |
 | **Media** (`echo-media-card`) | Sonos "now playing" with album art, transport, shuffle/repeat, grouping with per-speaker volume, Sonos favorites, and your Music Assistant library and Spotify (artist → albums → songs). Optional live queue straight from Music Assistant. |
 | **Alerts** (`echo-notify`) | Full-screen, must-dismiss alerts over every page: National Weather Service warnings, Home Assistant notifications, or your own automations. |
+| **Settings** (`echo-show-common`) | The gear button on every page opens one settings panel: microphone, camera, brightness, volume, screensaver and wake word for the display (from the Kiosk Satellite app), plus weather, timer, media and alert options and a screen-cleaning mode. While a timer runs, a large countdown floats over the other pages. |
 
 Every page shares the same bottom row of buttons, so the dashboard feels like one app. Pages go back to the weather view after a few idle minutes, but never while music is playing or a timer is running. Nothing ever plays audio through the tablet's media player, so the voice assistant (and its volume ducking) keeps working normally.
 
@@ -82,7 +83,21 @@ Testing in a desktop browser? Add `?echo_display=office` to the URL to pretend t
 
 All cards also accept `buttons` (the bottom row), `devices` (per-display overrides), `block_swipe` (default `true`: stops the kiosk's swipe-between-views gesture inside the card) and `tap_sound`.
 
-**Buttons:** each entry takes `icon`, and one of `navigation_path` or `url`. Add `active: true` on the current page's button. A button with `timers: [timer.a, timer.b, …]` shows the soonest countdown next to its icon, and `open_on_done` / `open_on_start: true` jump to its page when a timer finishes or starts.
+**Buttons:** each entry takes `icon`, and one of `navigation_path`, `url` or `action: settings` (opens the settings panel). Add `active: true` on the current page's button. A button with `timers: [timer.a, timer.b, …]` shows the soonest countdown next to its icon, and `open_on_done` / `open_on_start: true` jump to its page when a timer finishes or starts.
+
+### Settings panel and this display
+
+The gear button (`action: settings`) works the same on every page. Its **General** and **Display** tabs control the tablet through the entities the [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) app creates in Home Assistant (`switch.<display>_mute`, `switch.<display>_camera_enabled`, `light.<display>_screen`, `number.<display>_volume`, …); only the controls a display actually has are shown. The display is found from its Kiosk Satellite name (e.g. "Kitchen Echo Show 8" → `kitchen_echo_show_8`). If that doesn't match, set it at the top level of the dashboard's raw config:
+
+```yaml
+echo_show:
+  device: kitchen_echo_show_8        # entity prefix of this display
+  devices:                           # other displays, matched on their name
+    - match: office
+      device: office_echo_show_8
+```
+
+Choices made in the Weather, Media and Alerts tabs (weather source, this display's room, chime, timer countdown position) are stored on that display only.
 
 ### echo-weather-card
 

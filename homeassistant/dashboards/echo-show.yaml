@@ -14,6 +14,14 @@
 # matched against the Kiosk Satellite device name (case-insensitive substring). The
 # example below gives a display named "...Office..." its own timer set.
 
+# Which Kiosk Satellite device each display is (for the settings panel's device
+# controls). Usually found automatically from the display's name; set it if not.
+# echo_show:
+#   device: kitchen_echo_show_8
+#   devices:
+#     - match: office
+#       device: office_echo_show_8
+
 # Full-screen alerts (National Weather Service, persistent notifications whose id starts
 # with "echo_", and echo_notify events). Remove this block to turn them off.
 echo_notify:
@@ -67,6 +75,7 @@ views:
             navigation_path: /echo-show/media
           - icon: mdi:lightbulb-group  # spare buttons: add navigation_path or url
           - icon: mdi:cog
+            action: settings
         devices:
           - match: office
             timer_prefix: office_timer
@@ -90,15 +99,11 @@ views:
             navigation_path: /echo-show/media
           - icon: mdi:lightbulb-group
           - icon: mdi:cog
-            action: timer-settings      # opens the alarm volume / tone settings
-            settings:
-              device_volume_entity: number.kitchen_echo_show_8_volume  # <-- yours (for "Test")
+            action: settings            # the settings panel (same on every page)
         devices:
           - match: office
             timer_prefix: office_timer
             satellite: assist_satellite.office_echo_show_8         # <-- yours
-            settings:
-              device_volume_entity: null
 
   - title: Media
     path: media
@@ -140,6 +145,7 @@ views:
             active: true
           - icon: mdi:lightbulb-group
           - icon: mdi:cog
+            action: settings
         devices:
           - match: office
             timer_prefix: office_timer

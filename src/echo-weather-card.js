@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.5.0";
+  var VERSION = "1.6.0";
 
 
   // ---------- which display is this? ----------
@@ -482,6 +482,7 @@
       this._ensureSubscriptions();
       this._update();
       this._updateBadges();
+      this._updateOverlay();
       if (this._settingsEl) this._settingsEl.hass = hass;
     },
     get: function () {
@@ -494,6 +495,15 @@
       this._ensureSubscriptions();
     }
     var self = this;
+    // Settings panel changes (source, animations, hourly wind).
+    if (!this._onPrefs) this._onPrefs = function (ev) {
+      if (!self._config || !self._built) return;
+      if (ev.detail && ev.detail.key === "weather_source") { self._sourceIndex = self._loadSource(); self._ensureSubscriptions(); }
+      self._sig = ""; self._fxSig = ""; self._chartSig = "";
+      self._update();
+      self._renderChart();
+    };
+    window.addEventListener("echo-show-prefs", this._onPrefs);
     if (window.ResizeObserver && this._built && !this._ro) {
       this._ro = new ResizeObserver(function () { self._chartSig = ""; self._renderChart(); });
       this._ro.observe(this._fcEl);
@@ -501,6 +511,7 @@
   };
 
   EchoWeatherCard.prototype.disconnectedCallback = function () {
+    if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
     this._unsubscribe();
     if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
     if (this._settingsEl) this._settingsEl.close();
@@ -532,10 +543,12 @@
       '<div class="fc" role="button"><div class="scroller"></div><div class="mode"></div></div>' +
       (buttons.length ? '<div class="btns">' + btnHtml + "</div>" : "") +
       "</div>" +
+      '<echo-timer-overlay hidden auto-pos="top-right"></echo-timer-overlay>' +
       '<div class="pop hidden"></div>' +
       "</div>";
 
     this._rootEl = root.querySelector(".root");
+    this._ovEl = root.querySelector("echo-timer-overlay");
     this._bgEl = root.querySelector(".bg");
     this._fxEl = root.querySelector(".fx");
     this._nowEl = root.querySelector(".now");
@@ -585,9 +598,10 @@
 
   EchoWeatherCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
-    if (btn.action === "timer-settings") {
-      // The popup lives in echo-timer-card.js (loaded as its own resource).
-      if (window.EchoAlarmSettingsOpen) window.EchoAlarmSettingsOpen(this, this._rootEl, btn.settings);
+    if (btn.action === "settings" || btn.action === "timer-settings") {
+      // Shared settings panel (echo-show-common); the old timer-only popup otherwise.
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      else if (window.EchoAlarmSettingsOpen) window.EchoAlarmSettingsOpen(this, this._rootEl, btn.settings);
     } else if (btn.navigation_path) {
       window.history.pushState(null, "", btn.navigation_path);
       var ev = new Event("location-changed", { bubbles: true, composed: true });
@@ -674,6 +688,20 @@
     var self = this;
     if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
     if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+  };
+
+  // The big countdown over this page (echo-show-common's <echo-timer-overlay>).
+  EchoWeatherCard.prototype._overlayTimers = function () {
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
+    return [];
+  };
+  EchoWeatherCard.prototype._updateOverlay = function () {
+    var el = this._ovEl;
+    if (!el || !el.update) return;
+    var buttons = this._config.buttons || [];
+    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
+    el.update(this._hass, this._overlayTimers());
   };
 
   EchoWeatherCard.prototype._paintBadges = function () {
@@ -842,7 +870,8 @@
     var c = cur.condition;
     var wet = WET.indexOf(c) !== -1;
     var cloudyish = c === "cloudy" || c === "partlycloudy" || c === "windy-variant";
-    var anim = this._config.animations !== false;
+    var pAnim = window.EchoShow ? window.EchoShow.prefs.get("weather_animations") : null;
+    var anim = pAnim !== null && pAnim !== undefined ? !!pAnim : this._config.animations !== false;
 
     var moonSt = this._state(this._config.moon);
     var illum = 0.5, waxing = true;
@@ -1004,10 +1033,13 @@
     for (var i = 0; i < list.length; i += g) {
       var grp = list.slice(i, i + g);
       var d = new Date(grp[0].datetime);
-      var t = 0, tn = 0, p = null, q = null;
+      var t = 0, tn = 0, p = null, q = null, ws = 0, wn = 0, ux = 0, uy = 0;
       grp.forEach(function (f) {
         var v = num(f.temperature);
         if (v !== null) { t += v; tn++; }
+        var w = num(f.wind_speed), wb = num(f.wind_bearing);
+        if (w !== null) { ws += w; wn++; }
+        if (wb !== null) { var wr = wb * Math.PI / 180, wwt = w === null ? 1 : Math.max(w, 0.1); ux += Math.sin(wr) * wwt; uy += Math.cos(wr) * wwt; }
         var pv = num(f.precipitation);
         if (pv !== null) p = (p || 0) + pv;
         var qv = num(f.precipitation_probability);
@@ -1027,6 +1059,8 @@
         lo: null,
         precip: p,
         prob: q,
+        wind: wn ? ws / wn : null,
+        bearing: ux || uy ? (Math.atan2(ux, uy) * 180 / Math.PI + 360) % 360 : null,
       });
       lastDay = dk;
     }
@@ -1067,7 +1101,7 @@
     var ent = this._forecastEntity();
     var shadowOn = this._rootEl.classList.contains("shadow");
     var sig = [this._mode, W, H, ent, shadowOn, data.length,
-      JSON.stringify(data.map(function (d) { return [d.hi, d.lo, d.precip, d.prob, d.condition, d.top]; }))].join("|");
+      JSON.stringify(data.map(function (d) { return [d.hi, d.lo, d.precip, d.prob, d.condition, d.top, d.wind, d.bearing]; }))].join("|");
     if (sig === this._chartSig) return;
     this._chartSig = sig;
 
@@ -1095,8 +1129,12 @@
     var barBottom = yPrecipText - fs * 1.05;
     var barBand = 4.5 * vh;
     var barTop = barBottom - barBand;
+    // Hourly view: a wind row (direction arrow + speed) between the lines and the rain bars.
+    var pWind = window.EchoShow ? window.EchoShow.prefs.get("weather_wind") : true;
+    var showWind = this._mode === "hourly" && pWind !== false && data.some(function (d) { return d.wind !== null && d.wind !== undefined; });
+    var wFs = 2.9 * vh, yWind = barTop - 1.4 * vh;
     var lineTop = chartTop + fs * 1.3;
-    var lineBottom = barTop - fs * 1.35;
+    var lineBottom = (showWind ? yWind - wFs * 1.25 : barTop) - fs * 1.35;
     if (lineBottom - lineTop < 4 * vh) lineBottom = lineTop + 4 * vh;
 
     var his = data.map(function (d) { return d.hi; });
@@ -1117,6 +1155,10 @@
     s += '<defs><linearGradient id="ewcHi" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + totalW + '" y2="0">';
     for (var i = 0; i < n; i++) {
       if (his[i] !== null) s += '<stop offset="' + (xs[i] / totalW).toFixed(4) + '" stop-color="' + tempColor(toFf(his[i])) + '"/>';
+    }
+    s += '</linearGradient><linearGradient id="ewcLo" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="' + totalW + '" y2="0">';
+    for (i = 0; i < n; i++) {
+      if (los[i] !== null) s += '<stop offset="' + (xs[i] / totalW).toFixed(4) + '" stop-color="' + tempColor(toFf(los[i])) + '"/>';
     }
     s += '</linearGradient><filter id="ewcTs" x="-20%" y="-40%" width="140%" height="180%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#000" flood-opacity="0.85"/></filter></defs>';
 
@@ -1160,7 +1202,7 @@
     });
     var loSegs = segments(los, xs, yOf);
     loSegs.forEach(function (seg) {
-      s += '<path d="' + smoothPath(seg) + '" fill="none" stroke="rgba(255,245,170,0.9)" stroke-width="' + (0.45 * vh) + '" stroke-dasharray="' + (0.5 * vh) + " " + (0.7 * vh) + '" stroke-linecap="round"/>';
+      s += '<path d="' + smoothPath(seg) + '" fill="none" stroke="url(#ewcLo)" stroke-width="' + (0.45 * vh) + '" stroke-linecap="round"/>';
     });
 
     // points + labels
@@ -1172,8 +1214,27 @@
       }
       if (los[i] !== null) {
         var yl = yOf(los[i]);
-        s += '<circle cx="' + xs[i] + '" cy="' + yl + '" r="' + (0.55 * vh) + '" fill="rgba(255,245,170,0.95)"/>';
+        s += '<circle cx="' + xs[i] + '" cy="' + yl + '" r="' + (0.55 * vh) + '" fill="' + tempColor(toFf(los[i])) + '"/>';
         t += '<text x="' + xs[i] + '" y="' + (yl + fs * 1.05) + '" text-anchor="middle" font-size="' + fs + '" fill="rgba(255,255,255,0.85)">' + Math.round(los[i]) + "°</text>";
+      }
+    }
+
+    if (showWind) {
+      var wUnit = st ? st.attributes.wind_speed_unit || "mph" : "mph";
+      var aS = 2.6 * vh;
+      for (i = 0; i < n; i++) {
+        var wd = data[i];
+        if (wd.wind === null || wd.wind === undefined) continue;
+        var spd = String(Math.round(wd.wind));
+        var tw = (spd.length * 0.56 + 0.4) * wFs + wUnit.length * 0.5 * wFs * 0.7;
+        var ax = xs[i] - tw / 2 - aS * 0.45, ay = yWind - wFs * 0.35;
+        if (wd.bearing !== null && wd.bearing !== undefined) {
+          // Arrow points the way the wind blows (bearing is where it comes from).
+          s += '<g transform="translate(' + ax.toFixed(1) + " " + ay.toFixed(1) + ") rotate(" + ((wd.bearing + 180) % 360).toFixed(0) + ')">' +
+            '<path d="M0 ' + (-aS / 2) + " L" + (aS * 0.38) + " " + (aS / 2) + " L0 " + (aS * 0.24) + " L" + (-aS * 0.38) + " " + (aS / 2) + ' Z" fill="#9be7ff"/></g>';
+        }
+        t += '<text x="' + (xs[i] + aS * 0.35) + '" y="' + yWind + '" text-anchor="middle" font-size="' + wFs + '" fill="#cdeffd">' + esc(spd) +
+          '<tspan font-size="' + (wFs * 0.7) + '" fill="rgba(205,239,253,.75)"> ' + esc(wUnit) + "</tspan></text>";
       }
     }
 

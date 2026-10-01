@@ -20,6 +20,7 @@ var pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
 // Load order matters only for readability; the cards don't depend on each other at load time.
 var FILES = [
+  "echo-show-common.js",
   "echo-weather-card.js",
   "echo-timer-card.js",
   "echo-media-card.js",
