@@ -731,7 +731,7 @@
     ":host(.bottom-right){bottom:13.5vh;right:2.6vh;}",
     ":host(.bottom-left){bottom:13.5vh;left:2.6vh;}",
     ":host(.media){top:11vh;left:1.4vh;}",
-    ".box{min-width:27vw;max-width:34vw;background:rgba(8,12,26,.84);border:1px solid rgba(255,255,255,.14);border-radius:2.8vh;box-shadow:0 1.6vh 4vh rgba(0,0,0,.5);padding:1vh 2.2vh;box-sizing:border-box;cursor:pointer;}",
+    ".box{min-width:27vw;max-width:34vw;background:rgba(10,14,28,.97);border:1px solid rgba(255,255,255,.14);border-radius:2.8vh;box-shadow:0 1.6vh 4vh rgba(0,0,0,.5);padding:1vh 2.2vh;box-sizing:border-box;cursor:pointer;}",
     ".t{display:flex;align-items:center;padding:1vh 0;}",
     ".t + .t{border-top:1px solid rgba(255,255,255,.1);}",
     ".ring{flex:0 0 auto;width:7vh;height:7vh;margin-right:1.8vh;}",
