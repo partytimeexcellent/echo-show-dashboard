@@ -1,7 +1,7 @@
 /*!
  * Echo Show Dashboard 1.6.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.5.0, echo-weather-card 1.7.2, echo-clock-card 2.2.0, echo-media-card 1.9.0, echo-climate-card 1.0.0, echo-notify 1.2.0
+ * echo-show-common 1.5.0, echo-weather-card 1.7.2, echo-clock-card 2.2.0, echo-media-card 1.9.0, echo-climate-card 1.0.1, echo-notify 1.2.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -7182,7 +7182,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.0";
+  var VERSION = "1.0.1";
 
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
@@ -7792,7 +7792,7 @@
   // ---------- house pill + sheet ----------
   var HOUSE = {
     home: { icon: "mdi:home", name: "Home" },
-    night: { icon: "mdi:home-moon-outline", name: "Night" },
+    night: { icon: "mdi:weather-night", name: "Night" },
     away: { icon: "mdi:home-export-outline", name: "Away" },
     vacation: { icon: "mdi:airplane", name: "Vacation" },
   };
@@ -7955,8 +7955,9 @@
     s += '<text x="' + e1[0] + '" y="' + (e1[1] + 6) + '" style="fill:rgba(255,255,255,.35);font-size:6px" text-anchor="middle">' + rg[1] + "</text>";
     // current temperature marker
     if (sp.cur !== null) {
-      var ca = this._ang(sp.cur), c1 = pt(ca, 70), c2 = pt(ca, 92);
-      s += '<line x1="' + c1[0].toFixed(2) + '" y1="' + c1[1].toFixed(2) + '" x2="' + c2[0].toFixed(2) + '" y2="' + c2[1].toFixed(2) + '" style="stroke:#fff;stroke-width:1.8;stroke-linecap:round"/>';
+      // a small pointer just inside the scale, so it never hides under a knob
+      var ca = this._ang(sp.cur), c0 = pt(ca, 73.5), cl = pt(ca - 3.2, 68), cr = pt(ca + 3.2, 68);
+      s += '<path d="M' + c0[0].toFixed(2) + " " + c0[1].toFixed(2) + "L" + cl[0].toFixed(2) + " " + cl[1].toFixed(2) + "L" + cr[0].toFixed(2) + " " + cr[1].toFixed(2) + 'Z" style="fill:#fff"/>';
     }
     // setpoint knobs
     var self = this;
@@ -9413,6 +9414,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.6.0", cards: ["echo-show-common 1.5.0","echo-weather-card 1.7.2","echo-clock-card 2.2.0","echo-media-card 1.9.0","echo-climate-card 1.0.0","echo-notify 1.2.0"] };
+  window.EchoShowDashboard = { version: "1.6.0", cards: ["echo-show-common 1.5.0","echo-weather-card 1.7.2","echo-clock-card 2.2.0","echo-media-card 1.9.0","echo-climate-card 1.0.1","echo-notify 1.2.0"] };
   console.info("%c Echo Show Dashboard 1.6.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

@@ -126,7 +126,7 @@ template:
       - name: Echo House Mode
         unique_id: echo_house_mode
         icon: >-
-          {{ {'home': 'mdi:home', 'night': 'mdi:home-moon-outline', 'away': 'mdi:home-export-outline', 'vacation': 'mdi:airplane'}.get(this.state, 'mdi:home') }}
+          {{ {'home': 'mdi:home', 'night': 'mdi:weather-night', 'away': 'mdi:home-export-outline', 'vacation': 'mdi:airplane'}.get(this.state, 'mdi:home') }}
         state: >-
           {% set s = 'sensor.echo_house_settings' %}
           {% set ov = state_attr(s, 'override') or 'auto' %}
