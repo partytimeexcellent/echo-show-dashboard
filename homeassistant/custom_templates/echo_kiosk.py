@@ -145,7 +145,7 @@ def get_settings(base, token):
     vals = {}
     for d in (r or {}).get("settings") or []:
         if d.get("key") in KEYS:
-            vals[d["key"]] = d.get("value", d.get("defaultValue"))
+            vals[d["key"]] = d.get("value", d.get("default"))
     return vals
 
 
@@ -341,7 +341,7 @@ def main():
         data = {}
     if op == "devices":
         out({"ok": True, "devices": sorted(tablets().keys())})
-    if op == "render":   # local preview of a tone (testing): data.name -> wav on stdout path
+    if op == "render" and os.environ.get("ECHO_KIOSK_DEV"):   # development only: write one tone to a file
         for name, make in TONES:
             if name == data.get("name"):
                 with open(data.get("path", "/tmp/tone.wav"), "wb") as f:
