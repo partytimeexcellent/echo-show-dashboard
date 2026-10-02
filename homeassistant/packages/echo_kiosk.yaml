@@ -1,0 +1,32 @@
+# Echo Show Dashboard: Kiosk Satellite alarm settings from the dashboard
+# https://github.com/partytimeexcellent/echo-show-dashboard
+#
+# Lets the settings panel's Alarms tab read and change each tablet's Kiosk Satellite
+# alarm settings (volume, tone, snooze, ease-in, sunrise, phrase) and add ringtones.
+# Home Assistant runs a small script that talks to the tablet's Remote API.
+#
+# Install:
+#   1. Copy custom_templates/echo_kiosk.py to <config>/custom_templates/echo_kiosk.py
+#      (next to echo_timers.jinja; Home Assistant ignores .py files there).
+#   2. Copy this file to <config>/packages/echo_kiosk.yaml.
+#   3. In each tablet's Kiosk Satellite: Settings > Remote Administration, turn on
+#      Remote management and set an admin password.
+#   4. Make a long-lived token for each tablet from any computer on your network:
+#        curl -X POST http://<tablet-ip>:2324/api/login \
+#          -H 'Content-Type: application/json' \
+#          -d '{"password": "<admin password>", "ttl_days": 3650}'
+#   5. Add a pair per tablet to secrets.yaml. <name> is a word from the tablet's
+#      Kiosk Satellite device name ("kitchen" for "Kitchen Echo Show 8"):
+#        echo_kiosk_<name>_url: http://<tablet-ip>:2324
+#        echo_kiosk_<name>_token: <the token>
+#   6. Restart Home Assistant.
+#
+# The token works like the admin password and can't be revoked, so it stays in
+# secrets.yaml; the script never prints it. Only alarms.* settings can be changed.
+
+shell_command:
+  echo_kiosk: >-
+    python3 /config/custom_templates/echo_kiosk.py
+    {{ (kiosk | default('')) | base64_encode }}
+    {{ op | default('get') }}
+    {{ (data | default({})) | to_json | base64_encode }}

@@ -129,7 +129,7 @@ The old name `custom:echo-timer-card` still works and gives the same card.
 | `time_format` | HA profile | `12` or `24` for the alarm wheels and list. |
 | `timer_prefix` | `echo_timer` | Uses `timer.<prefix>_1..3` and `input_text.<prefix>_N_name`. |
 | `start_script` / `cancel_script` | `script.echo_timer_start` / `script.echo_timer_cancel` | |
-| `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick-start minutes. |
+| `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick picks (minutes) shown until this display has Recents. |
 | `alarm` | `true` | Ring in this browser when a timer finishes. |
 | `tone_entity` | `input_select.echo_timer_alarm_tone` | |
 | `satellite` | | `assist_satellite.*` of this display: the alarm pauses while it listens or speaks. |
@@ -146,6 +146,26 @@ Requirements:
 - Kiosk Satellite with its **Home Assistant** address and a long-lived token from an **administrator** user (Settings › Home Assistant). Kiosk Satellite only listens for alarm requests with an admin token.
 - The dashboard's Home Assistant user is an administrator, or set `alarm_script` to a script made from [Kiosk Satellite's alarms blueprint](https://github.com/jxlarrea/kiosk-satellite/blob/main/blueprints/script/kiosk_satellite_alarms.yaml) (it's also what lets an LLM voice assistant set alarms).
 - While an alarm rings, the Alarms tab shows Snooze and Stop, using the display's `Stop alarm` / `Snooze alarm` buttons.
+
+#### Alarm settings and tones (optional)
+
+The settings panel's **Alarms** tab sets the tablet's own Kiosk Satellite alarm settings: alarm volume, tone, snooze length, how long an alarm rings, ease-in, sunrise length and the spoken phrase. It can also add 11 alarm tones made for this dashboard to the tablet. Home Assistant does this through a small script, because a dashboard page can't call the tablet's Remote API itself. One-time setup:
+
+1. Copy [`homeassistant/custom_templates/echo_kiosk.py`](homeassistant/custom_templates/echo_kiosk.py) to `<config>/custom_templates/` and [`homeassistant/packages/echo_kiosk.yaml`](homeassistant/packages/echo_kiosk.yaml) to `<config>/packages/`.
+2. In each tablet's Kiosk Satellite, **Settings › Remote Administration**: turn on Remote management and set an admin password.
+3. Get a long-lived token for each tablet from any computer on your network (there's no button for it in the app):
+   ```sh
+   curl -X POST http://<tablet-ip>:2324/api/login -H 'Content-Type: application/json' \
+     -d '{"password": "<admin password>", "ttl_days": 3650}'
+   ```
+4. Add a pair per tablet to `secrets.yaml`. `<name>` is a word from the tablet's Kiosk Satellite device name, e.g. `kitchen` for "Kitchen Echo Show 8":
+   ```yaml
+   echo_kiosk_<name>_url: http://<tablet-ip>:2324
+   echo_kiosk_<name>_token: <the token>
+   ```
+5. Restart Home Assistant.
+
+The token stays in `secrets.yaml`; the script never prints it, and only `alarms.*` settings can be changed through it.
 
 Kiosk Satellite has no "edit" request, so editing an alarm deletes it and sets the new one. Alarms are matched by time and label, so two alarms at the same time need different labels to be edited here.
 

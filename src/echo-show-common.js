@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.3.0";
+  var VERSION = "1.4.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -236,6 +236,7 @@
     { id: "look", icon: "mdi:palette-outline", label: "Look" },
     { id: "weather", icon: "mdi:weather-partly-cloudy", label: "Weather" },
     { id: "timers", icon: "mdi:timer-sand", label: "Timers" },
+    { id: "alarms", icon: "mdi:alarm", label: "Alarms" },
     { id: "media", icon: "mdi:speaker-multiple", label: "Media" },
     { id: "alerts", icon: "mdi:alert-outline", label: "Alerts" },
     { id: "about", icon: "mdi:information-outline", label: "About" },
@@ -308,6 +309,19 @@
     ".bt ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;margin-right:1.2vh;}",
     ".bt.go{background:linear-gradient(180deg,#3ad16a,#27a84f);border-color:transparent;}",
     ".tl:active,.chip:active,.row:active,.bt:active,.done:active,.tab:active{transform:scale(.97);}",
+    /* alarm tones (Kiosk Satellite) */
+    ".tgrid{display:grid;grid-template-columns:repeat(3,1fr);grid-gap:1.2vh;}",
+    ".tn{height:8.4vh;border-radius:2vh;padding:0 2vh;display:flex;align-items:center;font-size:2.7vh;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}",
+    ".tn ha-icon{--mdc-icon-size:3.2vh;width:3.2vh;height:3.2vh;margin-right:1.2vh;opacity:.6;flex:0 0 auto;}",
+    ".tn.sel{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.6);color:var(--es-hi2,#ffc266);}",
+    ".tn.sel ha-icon{opacity:1;color:var(--es-hi,#ffb340);}",
+    ".tn:active{transform:scale(.97);}",
+    ".pin{width:100%;box-sizing:border-box;height:8vh;border-radius:2vh;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.2);color:#fff;font:inherit;font-size:2.9vh;padding:0 2.2vh;outline:none;-webkit-user-select:text;user-select:text;}",
+    ".pin:focus{border-color:rgba(var(--es-acc-rgb,255,159,10),.7);}",
+    ".note.warn{color:#ff9d94;opacity:1;}",
+    ".bt.busy{opacity:.5;pointer-events:none;}",
+    ".slrow{display:flex;align-items:center;gap:1.6vh;}",
+    ".slrow .sl{flex:1 1 auto;margin-bottom:0;}",
     /* info grid */
     ".info{display:grid;grid-template-columns:1fr 1fr;grid-gap:1vh 2.4vh;}",
     ".kv{display:flex;justify-content:space-between;font-size:2.6vh;padding:1.2vh 0;border-bottom:1px solid rgba(255,255,255,.06);}",
@@ -430,10 +444,11 @@
     has.look = true;
     has.weather = cardsOfType(d, "custom:echo-weather-card").length > 0;
     has.timers = cardsOfType(d, "custom:echo-timer-card").length + cardsOfType(d, "custom:echo-clock-card").length > 0;
+    has.alarms = cardsOfType(d, "custom:echo-timer-card").concat(cardsOfType(d, "custom:echo-clock-card")).some(function (c) { return c.alarms !== false; });
     has.media = cardsOfType(d, "custom:echo-media-card").length > 0;
     has.alerts = !!d.echo_notify;
     has.about = true;
-    if (!this._dash) { has.weather = has.timers = has.media = true; }
+    if (!this._dash) { has.weather = has.timers = has.alarms = has.media = true; }
     return TABS.filter(function (t) { return has[t.id]; });
   };
 
@@ -451,6 +466,9 @@
   // Re-render the open tab when something it shows changed (not while dragging).
   EchoShowSettings.prototype._refresh = function (force) {
     if (!this._built || !this._hass || this._drag) return;
+    if (this._tab === "alarms" && !this._ks) this._ksLoad();
+    var ae = this.shadowRoot.activeElement;
+    if (ae && ae.tagName === "INPUT") return;      // don't wipe what is being typed
     var html = this["_tab_" + this._tab] ? this["_tab_" + this._tab]() : "";
     if (!force && html === this._html) return;
     this._html = html;
@@ -459,6 +477,7 @@
     this._bodyEl.innerHTML = html;
     this._bodyEl.scrollTop = top;
     if (this._tab === "timers") this._mountAlarm();
+    if (this._tab === "alarms") this._bindPhrase();
   };
 
   // --- small builders ---
@@ -640,6 +659,156 @@
     this._alarmEl = el;
   };
 
+  // --- Alarms: Kiosk Satellite's own alarm settings, through shell_command.echo_kiosk ---
+  // (homeassistant/packages/echo_kiosk.yaml). The tablet's Remote API can't be called from
+  // the page, so Home Assistant runs a small script that reads the tablet's URL and token
+  // from secrets.yaml and makes the request.
+  var KS_SNOOZE = ["5", "10", "15", "20", "25", "30"], KS_SILENCE = ["5", "10", "15", "20", "30"];
+  var KS_SUNRISE = ["10", "15", "20", "25", "30"], KS_EASE = [10, 15, 20, 30, 45, 60, 90, 120];
+  var KS_TONE_PREFIX = "Echo ";
+
+  function toneLabel(f) {
+    if (!f) return "Built-in";
+    return String(f).replace(/\.[a-z0-9]+$/i, "").replace(new RegExp("^" + KS_TONE_PREFIX), "");
+  }
+
+  EchoShowSettings.prototype._ksKey = function (id) { return id; };
+
+  EchoShowSettings.prototype._ksCall = function (op, data) {
+    var h = this._hass, kiosk = ((this._name || "") + " " + (this._device || "")).trim();
+    return h.callWS({ type: "call_service", domain: "shell_command", service: "echo_kiosk", service_data: { kiosk: kiosk, op: op, data: data || {} }, return_response: true })
+      .then(function (r) {
+        var res = (r && r.response) || {};
+        try { return JSON.parse(res.stdout || ""); } catch (e) {
+          return { ok: false, error: "bad_output", message: String(res.stderr || res.stdout || "The helper script gave no answer.").slice(0, 300) };
+        }
+      }, function (e) {
+        var m = (e && e.message) || "";
+        return /not found|unknown|echo_kiosk/i.test(m) || (e && e.code === "service_not_found")
+          ? { ok: false, error: "no_service", message: "Home Assistant has no shell_command.echo_kiosk yet. Add packages/echo_kiosk.yaml and custom_templates/echo_kiosk.py, then restart Home Assistant." }
+          : { ok: false, error: "call_failed", message: m || "The call failed." };
+      });
+  };
+
+  EchoShowSettings.prototype._ksLoad = function () {
+    var self = this;
+    var keep = this._ks && this._ks.settings ? this._ks : null;
+    this._ks = keep || { loading: true };
+    this._ks.loading = true;
+    this._ksCall("get").then(function (r) {
+      if (r && r.ok) self._ks = { settings: r.settings || {}, sounds: r.sounds || [], tones: r.tones || [], tablet: r.tablet };
+      else self._ks = keep ? (keep.loading = false, keep.msg = r.message || r.error, keep) : { err: (r && (r.message || r.error)) || "No answer." };
+      if (self._tab === "alarms") self._refresh(false);
+    });
+  };
+
+  EchoShowSettings.prototype._ksSet = function (key, value) {
+    var self = this, ks = this._ks;
+    if (!ks || !ks.settings) return;
+    var patch = {};
+    patch[key] = value;
+    ks.settings[key] = value;           // show it now
+    ks.msg = null;
+    this._refresh(false);
+    return this._ksCall("set", patch).then(function (r) {
+      if (r && r.ok && r.settings) ks.settings = r.settings;
+      else {
+        ks.msg = (r && (r.errors && r.errors[key] || r.message || r.error)) || "The tablet didn't take that change.";
+        if (r && r.settings) ks.settings = r.settings;
+      }
+      if (self._tab === "alarms") self._refresh(false);
+      return r;
+    });
+  };
+
+  EchoShowSettings.prototype._ksAct = function (a, el) {
+    var self = this, ks = this._ks || {}, k = el.getAttribute("data-k"), v = el.getAttribute("data-v");
+    if (a === "ks-retry") { this._ks = null; this._refresh(true); return; }
+    if (!ks.settings) return;
+    if (a === "ks-sel") this._ksSet(k, v);
+    else if (a === "ks-num") this._ksSet(k, parseFloat(v));
+    else if (a === "ks-bool") this._ksSet(k, !ks.settings[k]);
+    else if (a === "ks-tone") {
+      // Picking a tone plays it once at the alarm volume, like Kiosk Satellite does.
+      var p = this._ksSet("alarms.tone", v);
+      if (p) p.then(function () { self._ksCall("test", { tone: v || "builtin" }); });
+    } else if (a === "ks-test") {
+      this._ksCall("test", { tone: ks.settings["alarms.tone"] || "builtin" });
+    } else if (a === "ks-install") {
+      ks.installing = true;
+      ks.msg = null;
+      this._refresh(false);
+      this._ksCall("install_tones").then(function (r) {
+        ks.installing = false;
+        if (r && r.ok) ks.sounds = r.sounds || ks.sounds;
+        else ks.msg = (r && (r.message || r.error)) || "Couldn't add the tones.";
+        if (self._tab === "alarms") self._refresh(false);
+      });
+    }
+  };
+
+  EchoShowSettings.prototype._bindPhrase = function () {
+    var self = this, inp = this._bodyEl.querySelector(".pin");
+    if (!inp) return;
+    ["keydown", "keyup", "keypress"].forEach(function (t) {
+      inp.addEventListener(t, function (ev) {
+        ev.stopPropagation();
+        if (t === "keydown" && ev.key === "Enter") inp.blur();
+      });
+    });
+    inp.addEventListener("change", function () {
+      var val = inp.value.trim();
+      if (self._ks && self._ks.settings && val !== self._ks.settings["alarms.phrase"]) self._ksSet("alarms.phrase", val);
+    });
+    inp.addEventListener("blur", function () { setTimeout(function () { self._refresh(false); }, 50); });
+  };
+
+  EchoShowSettings.prototype._tab_alarms = function () {
+    var ks = this._ks || { loading: true }, self = this;
+    if (!ks.settings) {
+      if (ks.err) return '<div class="note warn">' + esc(ks.err) + '</div><div class="btns"><div class="bt" role="button" data-a="ks-retry"><ha-icon icon="mdi:refresh"></ha-icon>Try again</div></div>' +
+        '<div class="note">These are Kiosk Satellite\'s alarm settings on this tablet. See the Alarms section of the README for the one-time setup.</div>';
+      return '<div class="note">Asking the tablet for its alarm settings\u2026</div>';
+    }
+    var s = ks.settings, h = "";
+    if (ks.msg) h += '<div class="note warn">' + esc(ks.msg) + "</div>";
+    var vol = Math.round((parseFloat(s["alarms.volume"]) || 0.7) * 100);
+    h += '<div class="sec">Volume</div><div class="slrow">' + this._slider("alarms.volume", "mdi:alarm-light-outline", "Alarm", vol, 5, 100, "%", "ks") +
+      '<div class="bt" role="button" data-a="ks-test"><ha-icon icon="mdi:play"></ha-icon>Test</div></div>';
+    // tones: ours first, then the tablet's other sounds
+    var cur = s["alarms.tone"] || "", sounds = ks.sounds || [], tones = ks.tones || [];
+    var mine = sounds.filter(function (f) { return f.indexOf(KS_TONE_PREFIX) === 0; });
+    var other = sounds.filter(function (f) { return f.indexOf(KS_TONE_PREFIX) !== 0; });
+    var list = [""].concat(mine, other);
+    h += '<div class="sec">Tone</div><div class="tgrid">';
+    list.forEach(function (f) {
+      h += '<div class="tn' + (f === cur ? " sel" : "") + '" role="button" data-a="ks-tone" data-v="' + esc(f) + '"><ha-icon icon="' + (f === cur ? "mdi:music-note" : "mdi:music-note-outline") + '"></ha-icon>' + esc(toneLabel(f)) + "</div>";
+    });
+    h += "</div>";
+    var missing = tones.filter(function (t) { return sounds.indexOf(t) === -1; }).length;
+    if (missing) {
+      h += '<div class="btns" style="margin-top:1.4vh"><div class="bt go' + (ks.installing ? " busy" : "") + '" role="button" data-a="ks-install"><ha-icon icon="mdi:music-note-plus"></ha-icon>' +
+        (ks.installing ? "Adding tones\u2026" : "Add " + missing + " more tone" + (missing > 1 ? "s" : "")) + "</div></div>";
+    }
+    h += '<div class="note">Picking a tone plays it once on the tablet at the alarm volume.</div>';
+    function chips(key, opts, unit) {
+      return self._chips(opts.map(function (o) { return { v: o, l: o + " " + unit }; }), s[key], "ks-sel", ' data-k="' + key + '"');
+    }
+    h += '<div class="sec">Snooze length</div>' + chips("alarms.snooze_minutes", KS_SNOOZE, "min");
+    h += '<div class="sec">Stop ringing after</div>' + chips("alarms.silence_after_minutes", KS_SILENCE, "min");
+    h += '<div class="sec">Ease in</div>' + this._switchRow("Start quiet and get louder", "For alarms that haven\u2019t chosen for themselves", !!s["alarms.ease_in"], "ks-bool", ' data-k="alarms.ease_in"');
+    if (s["alarms.ease_in"]) {
+      h += '<div style="margin-top:1.2vh">' + this._chips(KS_EASE.map(function (o) { return { v: o, l: o < 60 ? o + " s" : Math.floor(o / 60) + " min" + (o % 60 ? " " + (o % 60) + " s" : "") }; }),
+        String(parseFloat(s["alarms.ease_in_seconds"])), "ks-num", ' data-k="alarms.ease_in_seconds"') + "</div>";
+    }
+    h += '<div class="sec">Sunrise length</div>' + chips("alarms.sunrise_minutes", KS_SUNRISE, "min") +
+      '<div class="note">How long the screen brightens before an alarm that has Sunrise on.</div>';
+    h += '<div class="sec">Spoken phrase</div><input class="pin" maxlength="120" value="' + esc(s["alarms.phrase"] || "") + '" placeholder="It\'s {time}. {label}">' +
+      '<div class="note">Said between the rings by alarms with Speak when it rings on. {time}, {label} and {day} are filled in.</div>';
+    h += '<div class="note">These are Kiosk Satellite\u2019s alarm settings on ' + esc(ks.tablet ? "the " + ks.tablet + " tablet" : "this tablet") + ' and apply to all of its alarms.</div>';
+    return h;
+  };
+
   EchoShowSettings.prototype._tab_media = function () {
     var c = cardsOfType(this._dash || {}, "custom:echo-media-card")[0];
     if (!c) return '<div class="note">There\'s no media page on this dashboard.</div>';
@@ -770,6 +939,9 @@
     } else if (a === "clean") {
       this._clean();
       return;
+    } else if (a.indexOf("ks-") === 0) {
+      this._ksAct(a, el);
+      return;
     }
     this._refresh(true);
   };
@@ -786,7 +958,8 @@
   EchoShowSettings.prototype._commitSlide = function () {
     var d = this._drag, kind = d.el.getAttribute("data-kind");
     if (d.v === undefined) return;
-    this._hold(d.id, d.v);
+    if (kind !== "ks") this._hold(d.id, d.v);
+    if (kind === "ks") { this._ksSet(this._ksKey(d.id), d.v / 100); return; }
     if (kind === "light") {
       if (d.v <= 0) this._hass.callService("light", "turn_on", { entity_id: d.id, brightness: 1 });
       else this._hass.callService("light", "turn_on", { entity_id: d.id, brightness_pct: d.v });

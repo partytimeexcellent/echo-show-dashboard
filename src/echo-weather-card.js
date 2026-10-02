@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.1";
+  var VERSION = "1.7.2";
 
 
   // ---------- which display is this? ----------
@@ -1237,7 +1237,7 @@
     // Hourly view: a wind row (direction arrow + speed) between the lines and the rain bars.
     var pWind = window.EchoShow ? window.EchoShow.prefs.get("weather_wind") : true;
     var showWind = this._mode === "hourly" && pWind !== false && data.some(function (d) { return d.wind !== null && d.wind !== undefined; });
-    var wFs = 2.9 * vh, yWind = barTop - 1.4 * vh;
+    var wFs = 3.4 * vh, yWind = barTop - 1.4 * vh;
     var lineTop = chartTop + fs * 1.3;
     var lineBottom = (showWind ? yWind - wFs * 1.25 : barTop) - fs * 1.35;
     if (lineBottom - lineTop < 4 * vh) lineBottom = lineTop + 4 * vh;
@@ -1325,21 +1325,20 @@
     }
 
     if (showWind) {
-      var wUnit = st ? st.attributes.wind_speed_unit || "mph" : "mph";
-      var aS = 2.6 * vh;
+      // Just the number: the unit is the same in every column (mph, km/h... as the source reports).
+      var aS = 2.9 * vh;
       for (i = 0; i < n; i++) {
         var wd = data[i];
         if (wd.wind === null || wd.wind === undefined) continue;
         var spd = String(Math.round(wd.wind));
-        var tw = (spd.length * 0.56 + 0.4) * wFs + wUnit.length * 0.5 * wFs * 0.7;
+        var tw = (spd.length * 0.56 + 0.4) * wFs;
         var ax = xs[i] - tw / 2 - aS * 0.45, ay = yWind - wFs * 0.35;
         if (wd.bearing !== null && wd.bearing !== undefined) {
           // Arrow points the way the wind blows (bearing is where it comes from).
           s += '<g transform="translate(' + ax.toFixed(1) + " " + ay.toFixed(1) + ") rotate(" + ((wd.bearing + 180) % 360).toFixed(0) + ')">' +
             '<path d="M0 ' + (-aS / 2) + " L" + (aS * 0.38) + " " + (aS / 2) + " L0 " + (aS * 0.24) + " L" + (-aS * 0.38) + " " + (aS / 2) + ' Z" fill="#9be7ff"/></g>';
         }
-        t += '<text x="' + (xs[i] + aS * 0.35) + '" y="' + yWind + '" text-anchor="middle" font-size="' + wFs + '" fill="#cdeffd">' + esc(spd) +
-          '<tspan font-size="' + (wFs * 0.7) + '" fill="rgba(205,239,253,.75)"> ' + esc(wUnit) + "</tspan></text>";
+        t += '<text x="' + (xs[i] + aS * 0.35) + '" y="' + yWind + '" text-anchor="middle" font-size="' + wFs + '" fill="#cdeffd">' + esc(spd) + "</text>";
       }
     }
 

@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.3.0
+ * Echo Show Dashboard 1.4.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.3.0, echo-weather-card 1.7.1, echo-clock-card 2.0.0, echo-media-card 1.9.0, echo-notify 1.2.0
+ * echo-show-common 1.4.0, echo-weather-card 1.7.2, echo-clock-card 2.1.0, echo-media-card 1.9.0, echo-notify 1.2.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -31,7 +31,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.3.0";
+  var VERSION = "1.4.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -245,6 +245,7 @@
     { id: "look", icon: "mdi:palette-outline", label: "Look" },
     { id: "weather", icon: "mdi:weather-partly-cloudy", label: "Weather" },
     { id: "timers", icon: "mdi:timer-sand", label: "Timers" },
+    { id: "alarms", icon: "mdi:alarm", label: "Alarms" },
     { id: "media", icon: "mdi:speaker-multiple", label: "Media" },
     { id: "alerts", icon: "mdi:alert-outline", label: "Alerts" },
     { id: "about", icon: "mdi:information-outline", label: "About" },
@@ -317,6 +318,19 @@
     ".bt ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;margin-right:1.2vh;}",
     ".bt.go{background:linear-gradient(180deg,#3ad16a,#27a84f);border-color:transparent;}",
     ".tl:active,.chip:active,.row:active,.bt:active,.done:active,.tab:active{transform:scale(.97);}",
+    /* alarm tones (Kiosk Satellite) */
+    ".tgrid{display:grid;grid-template-columns:repeat(3,1fr);grid-gap:1.2vh;}",
+    ".tn{height:8.4vh;border-radius:2vh;padding:0 2vh;display:flex;align-items:center;font-size:2.7vh;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}",
+    ".tn ha-icon{--mdc-icon-size:3.2vh;width:3.2vh;height:3.2vh;margin-right:1.2vh;opacity:.6;flex:0 0 auto;}",
+    ".tn.sel{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.6);color:var(--es-hi2,#ffc266);}",
+    ".tn.sel ha-icon{opacity:1;color:var(--es-hi,#ffb340);}",
+    ".tn:active{transform:scale(.97);}",
+    ".pin{width:100%;box-sizing:border-box;height:8vh;border-radius:2vh;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.2);color:#fff;font:inherit;font-size:2.9vh;padding:0 2.2vh;outline:none;-webkit-user-select:text;user-select:text;}",
+    ".pin:focus{border-color:rgba(var(--es-acc-rgb,255,159,10),.7);}",
+    ".note.warn{color:#ff9d94;opacity:1;}",
+    ".bt.busy{opacity:.5;pointer-events:none;}",
+    ".slrow{display:flex;align-items:center;gap:1.6vh;}",
+    ".slrow .sl{flex:1 1 auto;margin-bottom:0;}",
     /* info grid */
     ".info{display:grid;grid-template-columns:1fr 1fr;grid-gap:1vh 2.4vh;}",
     ".kv{display:flex;justify-content:space-between;font-size:2.6vh;padding:1.2vh 0;border-bottom:1px solid rgba(255,255,255,.06);}",
@@ -439,10 +453,11 @@
     has.look = true;
     has.weather = cardsOfType(d, "custom:echo-weather-card").length > 0;
     has.timers = cardsOfType(d, "custom:echo-timer-card").length + cardsOfType(d, "custom:echo-clock-card").length > 0;
+    has.alarms = cardsOfType(d, "custom:echo-timer-card").concat(cardsOfType(d, "custom:echo-clock-card")).some(function (c) { return c.alarms !== false; });
     has.media = cardsOfType(d, "custom:echo-media-card").length > 0;
     has.alerts = !!d.echo_notify;
     has.about = true;
-    if (!this._dash) { has.weather = has.timers = has.media = true; }
+    if (!this._dash) { has.weather = has.timers = has.alarms = has.media = true; }
     return TABS.filter(function (t) { return has[t.id]; });
   };
 
@@ -460,6 +475,9 @@
   // Re-render the open tab when something it shows changed (not while dragging).
   EchoShowSettings.prototype._refresh = function (force) {
     if (!this._built || !this._hass || this._drag) return;
+    if (this._tab === "alarms" && !this._ks) this._ksLoad();
+    var ae = this.shadowRoot.activeElement;
+    if (ae && ae.tagName === "INPUT") return;      // don't wipe what is being typed
     var html = this["_tab_" + this._tab] ? this["_tab_" + this._tab]() : "";
     if (!force && html === this._html) return;
     this._html = html;
@@ -468,6 +486,7 @@
     this._bodyEl.innerHTML = html;
     this._bodyEl.scrollTop = top;
     if (this._tab === "timers") this._mountAlarm();
+    if (this._tab === "alarms") this._bindPhrase();
   };
 
   // --- small builders ---
@@ -649,6 +668,156 @@
     this._alarmEl = el;
   };
 
+  // --- Alarms: Kiosk Satellite's own alarm settings, through shell_command.echo_kiosk ---
+  // (homeassistant/packages/echo_kiosk.yaml). The tablet's Remote API can't be called from
+  // the page, so Home Assistant runs a small script that reads the tablet's URL and token
+  // from secrets.yaml and makes the request.
+  var KS_SNOOZE = ["5", "10", "15", "20", "25", "30"], KS_SILENCE = ["5", "10", "15", "20", "30"];
+  var KS_SUNRISE = ["10", "15", "20", "25", "30"], KS_EASE = [10, 15, 20, 30, 45, 60, 90, 120];
+  var KS_TONE_PREFIX = "Echo ";
+
+  function toneLabel(f) {
+    if (!f) return "Built-in";
+    return String(f).replace(/\.[a-z0-9]+$/i, "").replace(new RegExp("^" + KS_TONE_PREFIX), "");
+  }
+
+  EchoShowSettings.prototype._ksKey = function (id) { return id; };
+
+  EchoShowSettings.prototype._ksCall = function (op, data) {
+    var h = this._hass, kiosk = ((this._name || "") + " " + (this._device || "")).trim();
+    return h.callWS({ type: "call_service", domain: "shell_command", service: "echo_kiosk", service_data: { kiosk: kiosk, op: op, data: data || {} }, return_response: true })
+      .then(function (r) {
+        var res = (r && r.response) || {};
+        try { return JSON.parse(res.stdout || ""); } catch (e) {
+          return { ok: false, error: "bad_output", message: String(res.stderr || res.stdout || "The helper script gave no answer.").slice(0, 300) };
+        }
+      }, function (e) {
+        var m = (e && e.message) || "";
+        return /not found|unknown|echo_kiosk/i.test(m) || (e && e.code === "service_not_found")
+          ? { ok: false, error: "no_service", message: "Home Assistant has no shell_command.echo_kiosk yet. Add packages/echo_kiosk.yaml and custom_templates/echo_kiosk.py, then restart Home Assistant." }
+          : { ok: false, error: "call_failed", message: m || "The call failed." };
+      });
+  };
+
+  EchoShowSettings.prototype._ksLoad = function () {
+    var self = this;
+    var keep = this._ks && this._ks.settings ? this._ks : null;
+    this._ks = keep || { loading: true };
+    this._ks.loading = true;
+    this._ksCall("get").then(function (r) {
+      if (r && r.ok) self._ks = { settings: r.settings || {}, sounds: r.sounds || [], tones: r.tones || [], tablet: r.tablet };
+      else self._ks = keep ? (keep.loading = false, keep.msg = r.message || r.error, keep) : { err: (r && (r.message || r.error)) || "No answer." };
+      if (self._tab === "alarms") self._refresh(false);
+    });
+  };
+
+  EchoShowSettings.prototype._ksSet = function (key, value) {
+    var self = this, ks = this._ks;
+    if (!ks || !ks.settings) return;
+    var patch = {};
+    patch[key] = value;
+    ks.settings[key] = value;           // show it now
+    ks.msg = null;
+    this._refresh(false);
+    return this._ksCall("set", patch).then(function (r) {
+      if (r && r.ok && r.settings) ks.settings = r.settings;
+      else {
+        ks.msg = (r && (r.errors && r.errors[key] || r.message || r.error)) || "The tablet didn't take that change.";
+        if (r && r.settings) ks.settings = r.settings;
+      }
+      if (self._tab === "alarms") self._refresh(false);
+      return r;
+    });
+  };
+
+  EchoShowSettings.prototype._ksAct = function (a, el) {
+    var self = this, ks = this._ks || {}, k = el.getAttribute("data-k"), v = el.getAttribute("data-v");
+    if (a === "ks-retry") { this._ks = null; this._refresh(true); return; }
+    if (!ks.settings) return;
+    if (a === "ks-sel") this._ksSet(k, v);
+    else if (a === "ks-num") this._ksSet(k, parseFloat(v));
+    else if (a === "ks-bool") this._ksSet(k, !ks.settings[k]);
+    else if (a === "ks-tone") {
+      // Picking a tone plays it once at the alarm volume, like Kiosk Satellite does.
+      var p = this._ksSet("alarms.tone", v);
+      if (p) p.then(function () { self._ksCall("test", { tone: v || "builtin" }); });
+    } else if (a === "ks-test") {
+      this._ksCall("test", { tone: ks.settings["alarms.tone"] || "builtin" });
+    } else if (a === "ks-install") {
+      ks.installing = true;
+      ks.msg = null;
+      this._refresh(false);
+      this._ksCall("install_tones").then(function (r) {
+        ks.installing = false;
+        if (r && r.ok) ks.sounds = r.sounds || ks.sounds;
+        else ks.msg = (r && (r.message || r.error)) || "Couldn't add the tones.";
+        if (self._tab === "alarms") self._refresh(false);
+      });
+    }
+  };
+
+  EchoShowSettings.prototype._bindPhrase = function () {
+    var self = this, inp = this._bodyEl.querySelector(".pin");
+    if (!inp) return;
+    ["keydown", "keyup", "keypress"].forEach(function (t) {
+      inp.addEventListener(t, function (ev) {
+        ev.stopPropagation();
+        if (t === "keydown" && ev.key === "Enter") inp.blur();
+      });
+    });
+    inp.addEventListener("change", function () {
+      var val = inp.value.trim();
+      if (self._ks && self._ks.settings && val !== self._ks.settings["alarms.phrase"]) self._ksSet("alarms.phrase", val);
+    });
+    inp.addEventListener("blur", function () { setTimeout(function () { self._refresh(false); }, 50); });
+  };
+
+  EchoShowSettings.prototype._tab_alarms = function () {
+    var ks = this._ks || { loading: true }, self = this;
+    if (!ks.settings) {
+      if (ks.err) return '<div class="note warn">' + esc(ks.err) + '</div><div class="btns"><div class="bt" role="button" data-a="ks-retry"><ha-icon icon="mdi:refresh"></ha-icon>Try again</div></div>' +
+        '<div class="note">These are Kiosk Satellite\'s alarm settings on this tablet. See the Alarms section of the README for the one-time setup.</div>';
+      return '<div class="note">Asking the tablet for its alarm settings\u2026</div>';
+    }
+    var s = ks.settings, h = "";
+    if (ks.msg) h += '<div class="note warn">' + esc(ks.msg) + "</div>";
+    var vol = Math.round((parseFloat(s["alarms.volume"]) || 0.7) * 100);
+    h += '<div class="sec">Volume</div><div class="slrow">' + this._slider("alarms.volume", "mdi:alarm-light-outline", "Alarm", vol, 5, 100, "%", "ks") +
+      '<div class="bt" role="button" data-a="ks-test"><ha-icon icon="mdi:play"></ha-icon>Test</div></div>';
+    // tones: ours first, then the tablet's other sounds
+    var cur = s["alarms.tone"] || "", sounds = ks.sounds || [], tones = ks.tones || [];
+    var mine = sounds.filter(function (f) { return f.indexOf(KS_TONE_PREFIX) === 0; });
+    var other = sounds.filter(function (f) { return f.indexOf(KS_TONE_PREFIX) !== 0; });
+    var list = [""].concat(mine, other);
+    h += '<div class="sec">Tone</div><div class="tgrid">';
+    list.forEach(function (f) {
+      h += '<div class="tn' + (f === cur ? " sel" : "") + '" role="button" data-a="ks-tone" data-v="' + esc(f) + '"><ha-icon icon="' + (f === cur ? "mdi:music-note" : "mdi:music-note-outline") + '"></ha-icon>' + esc(toneLabel(f)) + "</div>";
+    });
+    h += "</div>";
+    var missing = tones.filter(function (t) { return sounds.indexOf(t) === -1; }).length;
+    if (missing) {
+      h += '<div class="btns" style="margin-top:1.4vh"><div class="bt go' + (ks.installing ? " busy" : "") + '" role="button" data-a="ks-install"><ha-icon icon="mdi:music-note-plus"></ha-icon>' +
+        (ks.installing ? "Adding tones\u2026" : "Add " + missing + " more tone" + (missing > 1 ? "s" : "")) + "</div></div>";
+    }
+    h += '<div class="note">Picking a tone plays it once on the tablet at the alarm volume.</div>';
+    function chips(key, opts, unit) {
+      return self._chips(opts.map(function (o) { return { v: o, l: o + " " + unit }; }), s[key], "ks-sel", ' data-k="' + key + '"');
+    }
+    h += '<div class="sec">Snooze length</div>' + chips("alarms.snooze_minutes", KS_SNOOZE, "min");
+    h += '<div class="sec">Stop ringing after</div>' + chips("alarms.silence_after_minutes", KS_SILENCE, "min");
+    h += '<div class="sec">Ease in</div>' + this._switchRow("Start quiet and get louder", "For alarms that haven\u2019t chosen for themselves", !!s["alarms.ease_in"], "ks-bool", ' data-k="alarms.ease_in"');
+    if (s["alarms.ease_in"]) {
+      h += '<div style="margin-top:1.2vh">' + this._chips(KS_EASE.map(function (o) { return { v: o, l: o < 60 ? o + " s" : Math.floor(o / 60) + " min" + (o % 60 ? " " + (o % 60) + " s" : "") }; }),
+        String(parseFloat(s["alarms.ease_in_seconds"])), "ks-num", ' data-k="alarms.ease_in_seconds"') + "</div>";
+    }
+    h += '<div class="sec">Sunrise length</div>' + chips("alarms.sunrise_minutes", KS_SUNRISE, "min") +
+      '<div class="note">How long the screen brightens before an alarm that has Sunrise on.</div>';
+    h += '<div class="sec">Spoken phrase</div><input class="pin" maxlength="120" value="' + esc(s["alarms.phrase"] || "") + '" placeholder="It\'s {time}. {label}">' +
+      '<div class="note">Said between the rings by alarms with Speak when it rings on. {time}, {label} and {day} are filled in.</div>';
+    h += '<div class="note">These are Kiosk Satellite\u2019s alarm settings on ' + esc(ks.tablet ? "the " + ks.tablet + " tablet" : "this tablet") + ' and apply to all of its alarms.</div>';
+    return h;
+  };
+
   EchoShowSettings.prototype._tab_media = function () {
     var c = cardsOfType(this._dash || {}, "custom:echo-media-card")[0];
     if (!c) return '<div class="note">There\'s no media page on this dashboard.</div>';
@@ -779,6 +948,9 @@
     } else if (a === "clean") {
       this._clean();
       return;
+    } else if (a.indexOf("ks-") === 0) {
+      this._ksAct(a, el);
+      return;
     }
     this._refresh(true);
   };
@@ -795,7 +967,8 @@
   EchoShowSettings.prototype._commitSlide = function () {
     var d = this._drag, kind = d.el.getAttribute("data-kind");
     if (d.v === undefined) return;
-    this._hold(d.id, d.v);
+    if (kind !== "ks") this._hold(d.id, d.v);
+    if (kind === "ks") { this._ksSet(this._ksKey(d.id), d.v / 100); return; }
     if (kind === "light") {
       if (d.v <= 0) this._hass.callService("light", "turn_on", { entity_id: d.id, brightness: 1 });
       else this._hass.callService("light", "turn_on", { entity_id: d.id, brightness_pct: d.v });
@@ -992,7 +1165,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.1";
+  var VERSION = "1.7.2";
 
 
   // ---------- which display is this? ----------
@@ -2219,7 +2392,7 @@
     // Hourly view: a wind row (direction arrow + speed) between the lines and the rain bars.
     var pWind = window.EchoShow ? window.EchoShow.prefs.get("weather_wind") : true;
     var showWind = this._mode === "hourly" && pWind !== false && data.some(function (d) { return d.wind !== null && d.wind !== undefined; });
-    var wFs = 2.9 * vh, yWind = barTop - 1.4 * vh;
+    var wFs = 3.4 * vh, yWind = barTop - 1.4 * vh;
     var lineTop = chartTop + fs * 1.3;
     var lineBottom = (showWind ? yWind - wFs * 1.25 : barTop) - fs * 1.35;
     if (lineBottom - lineTop < 4 * vh) lineBottom = lineTop + 4 * vh;
@@ -2307,21 +2480,20 @@
     }
 
     if (showWind) {
-      var wUnit = st ? st.attributes.wind_speed_unit || "mph" : "mph";
-      var aS = 2.6 * vh;
+      // Just the number: the unit is the same in every column (mph, km/h... as the source reports).
+      var aS = 2.9 * vh;
       for (i = 0; i < n; i++) {
         var wd = data[i];
         if (wd.wind === null || wd.wind === undefined) continue;
         var spd = String(Math.round(wd.wind));
-        var tw = (spd.length * 0.56 + 0.4) * wFs + wUnit.length * 0.5 * wFs * 0.7;
+        var tw = (spd.length * 0.56 + 0.4) * wFs;
         var ax = xs[i] - tw / 2 - aS * 0.45, ay = yWind - wFs * 0.35;
         if (wd.bearing !== null && wd.bearing !== undefined) {
           // Arrow points the way the wind blows (bearing is where it comes from).
           s += '<g transform="translate(' + ax.toFixed(1) + " " + ay.toFixed(1) + ") rotate(" + ((wd.bearing + 180) % 360).toFixed(0) + ')">' +
             '<path d="M0 ' + (-aS / 2) + " L" + (aS * 0.38) + " " + (aS / 2) + " L0 " + (aS * 0.24) + " L" + (-aS * 0.38) + " " + (aS / 2) + ' Z" fill="#9be7ff"/></g>';
         }
-        t += '<text x="' + (xs[i] + aS * 0.35) + '" y="' + yWind + '" text-anchor="middle" font-size="' + wFs + '" fill="#cdeffd">' + esc(spd) +
-          '<tspan font-size="' + (wFs * 0.7) + '" fill="rgba(205,239,253,.75)"> ' + esc(wUnit) + "</tspan></text>";
+        t += '<text x="' + (xs[i] + aS * 0.35) + '" y="' + yWind + '" text-anchor="middle" font-size="' + wFs + '" fill="#cdeffd">' + esc(spd) + "</text>";
       }
     }
 
@@ -2401,7 +2573,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.0";
+  var VERSION = "2.1.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -3062,6 +3234,29 @@
     return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()];
   }
 
+  // ---------- recently used timer lengths (per display) ----------
+
+  var REC_KEY = "echo-timer-recents";
+  function recentsLoad() {
+    try {
+      var r = JSON.parse(window.localStorage.getItem(REC_KEY) || "[]");
+      return r && r.filter ? r.filter(function (x) { return typeof x === "number" && x > 0; }) : [];
+    } catch (e) { return []; }
+  }
+  function recentsAdd(secs) {
+    var r = recentsLoad().filter(function (x) { return x !== secs; });
+    r.unshift(secs);
+    try { window.localStorage.setItem(REC_KEY, JSON.stringify(r.slice(0, 8))); } catch (e) { /* ignore */ }
+  }
+  // 90 -> "1 min 30 sec", 3600 -> "1 hr", 45 -> "45 sec"
+  function fmtLen(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60, out = [];
+    if (h) out.push(h + " hr");
+    if (m) out.push(m + " min");
+    if (s) out.push(s + " sec");
+    return out.slice(0, 2).join(" ") || "0 sec";
+  }
+
   // ---------- stopwatch state (per display, survives page changes and reloads) ----------
 
   var SW_KEY = "echo-stopwatch";
@@ -3113,11 +3308,11 @@
       "-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 30%,#000 70%,transparent 100%);mask-image:linear-gradient(180deg,transparent 0,#000 30%,#000 70%,transparent 100%);}",
     ".wi{position:absolute;left:0;right:0;top:50%;text-align:center;font-size:var(--wfs,4.4vh);font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9);will-change:transform;}",
     ".wi.sel{color:#fff;}",
-    ".wheel.unitd .wi{text-align:right;padding-right:calc(var(--ww,13vh) * .48);box-sizing:border-box;}",
-    ".wu{position:absolute;top:50%;left:54%;transform:translateY(-50%);font-size:2.6vh;font-weight:500;color:rgba(255,255,255,.9);pointer-events:none;white-space:nowrap;}",
+    ".wheel.unitd .wi{text-align:right;padding-right:calc(var(--ww,13vh) * .5);box-sizing:border-box;}",
+    ".wu{position:absolute;top:50%;left:56%;transform:translateY(-50%);font-size:calc(var(--wfs,4.4vh) * .5);font-weight:500;color:rgba(255,255,255,.9);pointer-events:none;white-space:nowrap;}",
     ".wheel.hrs{width:calc(var(--ww,13vh) * 1.2);}",
     ".wheel.hrs.unitd .wi{padding-right:calc(var(--ww,13vh) * .62);}",
-    ".wheel.hrs .wu{left:50%;}",
+    ".wheel.hrs .wu{left:52%;}",
     ".wheel.ampm{width:11vh;}",
     /* ===== timers (HA timer helpers) ===== */
     ".main{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:stretch;gap:2vh;width:100%;}",
@@ -3128,7 +3323,7 @@
     ".corner.plus{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.5);color:var(--es-hi2,#ffc266);}",
     ".corner ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;}",
     ".corner:active{transform:scale(.92);}",
-    ".tile{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;box-sizing:border-box;padding:2.4vh 2vh 2.6vh;border-radius:3.6vh;overflow:hidden;" +
+    ".tile{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;box-sizing:border-box;padding:2vh 2vh 2.2vh;border-radius:3.6vh;overflow:hidden;" +
       "background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.09);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);}",
     ".tile::before{content:'';position:absolute;left:0;top:0;right:0;bottom:0;border-radius:inherit;background:linear-gradient(180deg,rgba(255,69,58,.32),rgba(255,69,58,.1));opacity:0;pointer-events:none;}",
     ".tile.done{border-color:rgba(255,99,88,.6);}",
@@ -3181,8 +3376,9 @@
     ".ahint{font-size:2.5vh;opacity:.5;margin-top:1vh;}",
     ".awrap{width:100%;display:flex;flex-direction:column;align-items:center;}",
     /* new timer: wheels + quick picks + start */
-    ".add{--ww:12.4vh;}",
     ".chips{display:flex;flex-wrap:wrap;justify-content:center;gap:1.2vh;max-width:100%;}",
+    ".recents{display:flex;flex-direction:column;align-items:center;gap:1vh;max-width:100%;}",
+    ".rlbl{font-size:2.1vh;letter-spacing:.12em;text-transform:uppercase;opacity:.45;}",
     ".chip{height:6.4vh;min-width:10vh;padding:0 1.8vh;box-sizing:border-box;border-radius:3.2vh;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;font-size:2.7vh;cursor:pointer;white-space:nowrap;}",
     ".chip.sel{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.65);color:var(--es-hi2,#ffc266);}",
     ".go{height:9vh;border-radius:4.5vh;background:linear-gradient(180deg,#3ad16a,#27a84f);box-shadow:0 .8vh 2.4vh rgba(39,168,79,.3);display:flex;align-items:center;justify-content:center;font-size:3.6vh;cursor:pointer;width:var(--gow,46vh);max-width:94%;}",
@@ -4154,9 +4350,10 @@
     host.style.setProperty("--ring", (cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
     host.style.setProperty("--clock", (cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
     host.style.setProperty("--gow", (cols <= 1 ? 52 : cols === 2 ? 44 : 36) + "vh");
-    host.style.setProperty("--ww", (cols <= 1 ? 15 : cols === 2 ? 13 : 11) + "vh");
-    host.style.setProperty("--wrow", (cols <= 1 ? 7 : 6.4) + "vh");
-    host.style.setProperty("--wfs", (cols <= 1 ? 5 : cols === 2 ? 4.4 : 3.8) + "vh");
+    // Tall wheels: big rows are easier to flick and to land on with a finger.
+    host.style.setProperty("--ww", (cols <= 1 ? 20 : cols === 2 ? 15 : 11.6) + "vh");
+    host.style.setProperty("--wrow", (cols <= 1 ? 9 : cols === 2 ? 8.2 : 7.4) + "vh");
+    host.style.setProperty("--wfs", (cols <= 1 ? 6 : cols === 2 ? 5.2 : 4.6) + "vh");
 
     var h = "";
     for (var i = 0; i < items.length; i++) {
@@ -4220,15 +4417,16 @@
   };
 
   EchoClockCard.prototype._adderHtml = function (count, cols) {
-    var presets = this._config.presets, chips = "", max = cols >= 3 ? 3 : 6;
-    for (var i = 0; i < presets.length && i < max; i++) {
-      var p = presets[i];
-      chips += '<div class="chip" role="button" data-act="preset" data-min="' + p + '">' + (p >= 60 && p % 60 === 0 ? p / 60 + " hr" : p + " min") + "</div>";
+    // Recently used lengths, newest first (like iOS); the configured presets until there are any.
+    var rec = recentsLoad(), list = rec.length ? rec : this._config.presets.map(function (m) { return m * 60; });
+    var chips = "", max = cols >= 3 ? 2 : cols === 2 ? 3 : 6;
+    for (var i = 0; i < list.length && i < max; i++) {
+      chips += '<div class="chip" role="button" data-act="preset" data-sec="' + list[i] + '">' + esc(fmtLen(list[i])) + "</div>";
     }
     return '<div class="tile add">' +
       '<div class="cap">' + (count ? "Add a timer" : "New timer") + "</div>" +
       '<div class="wheels tw"></div>' +
-      '<div class="chips">' + chips + "</div>" +
+      '<div class="recents"><div class="rlbl">' + (rec.length ? "Recents" : "Quick picks") + '</div><div class="chips">' + chips + "</div></div>" +
       '<div class="go" role="button" data-act="start"><ha-icon icon="mdi:play"></ha-icon>Start</div>' +
       "</div>";
   };
@@ -4259,7 +4457,7 @@
     var secs = this._twSecs();
     var chips = this._mainEl.querySelectorAll(".chip");
     for (var i = 0; i < chips.length; i++) {
-      var on = parseInt(chips[i].getAttribute("data-min"), 10) * 60 === secs;
+      var on = parseInt(chips[i].getAttribute("data-sec"), 10) === secs;
       if (on !== chips[i].classList.contains("sel")) chips[i].classList.toggle("sel");
     }
     var go = this._mainEl.querySelector(".go");
@@ -4350,10 +4548,10 @@
     var timer = slot ? cfg.slots[slot - 1].timer : null;
     var scr = function (id) { return id.replace(/^script\./, ""); };
     if (act === "preset") {
-      var min = parseInt(el.getAttribute("data-min"), 10);
-      this._tw = { h: Math.floor(min / 60), m: min % 60, s: 0 };
+      var sec = parseInt(el.getAttribute("data-sec"), 10);
+      this._tw = { h: Math.floor(sec / 3600), m: Math.floor(sec / 60) % 60, s: sec % 60 };
       var tw = this._tw, w = this._twWheels || [];
-      if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(0, true); }
+      if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(tw.s, true); }
       this._paintAdder();
     } else if (act === "start") {
       var now = Date.now(), secs = this._twSecs();
@@ -4361,6 +4559,7 @@
       if (this._pending.start && now - this._pending.start < 1500) return; // debounce double taps
       this._pending.start = now;
       this._adding = false;
+      recentsAdd(secs);
       hass.callService("script", scr(cfg.start_script), { duration: secs, navigate: false, prefix: cfg.timer_prefix });
     } else if (act === "pause") {
       hass.callService("timer", "pause", { entity_id: timer });
@@ -7331,6 +7530,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.3.0", cards: ["echo-show-common 1.3.0","echo-weather-card 1.7.1","echo-clock-card 2.0.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
-  console.info("%c Echo Show Dashboard 1.3.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.4.0", cards: ["echo-show-common 1.4.0","echo-weather-card 1.7.2","echo-clock-card 2.1.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
+  console.info("%c Echo Show Dashboard 1.4.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

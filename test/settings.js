@@ -8,7 +8,7 @@ const path = require("path");
   p.on("pageerror", (e) => errs.push(e.message));
   const url = "file://" + path.join(__dirname, "index.html");
   const out = (n) => path.join(__dirname, "screenshots", n + ".png");
-  for (const t of ["general", "display", "weather", "timers", "media", "alerts", "about"]) {
+  for (const t of ["general", "display", "weather", "timers", "alarms", "media", "alerts", "about"]) {
     await p.goto(url + "#settings-" + t); await p.reload(); await p.waitForTimeout(1300);
     await p.screenshot({ path: out("set-" + t) });
   }

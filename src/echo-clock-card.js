@@ -12,7 +12,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.0";
+  var VERSION = "2.1.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -673,6 +673,29 @@
     return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()];
   }
 
+  // ---------- recently used timer lengths (per display) ----------
+
+  var REC_KEY = "echo-timer-recents";
+  function recentsLoad() {
+    try {
+      var r = JSON.parse(window.localStorage.getItem(REC_KEY) || "[]");
+      return r && r.filter ? r.filter(function (x) { return typeof x === "number" && x > 0; }) : [];
+    } catch (e) { return []; }
+  }
+  function recentsAdd(secs) {
+    var r = recentsLoad().filter(function (x) { return x !== secs; });
+    r.unshift(secs);
+    try { window.localStorage.setItem(REC_KEY, JSON.stringify(r.slice(0, 8))); } catch (e) { /* ignore */ }
+  }
+  // 90 -> "1 min 30 sec", 3600 -> "1 hr", 45 -> "45 sec"
+  function fmtLen(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60, out = [];
+    if (h) out.push(h + " hr");
+    if (m) out.push(m + " min");
+    if (s) out.push(s + " sec");
+    return out.slice(0, 2).join(" ") || "0 sec";
+  }
+
   // ---------- stopwatch state (per display, survives page changes and reloads) ----------
 
   var SW_KEY = "echo-stopwatch";
@@ -724,11 +747,11 @@
       "-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 30%,#000 70%,transparent 100%);mask-image:linear-gradient(180deg,transparent 0,#000 30%,#000 70%,transparent 100%);}",
     ".wi{position:absolute;left:0;right:0;top:50%;text-align:center;font-size:var(--wfs,4.4vh);font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9);will-change:transform;}",
     ".wi.sel{color:#fff;}",
-    ".wheel.unitd .wi{text-align:right;padding-right:calc(var(--ww,13vh) * .48);box-sizing:border-box;}",
-    ".wu{position:absolute;top:50%;left:54%;transform:translateY(-50%);font-size:2.6vh;font-weight:500;color:rgba(255,255,255,.9);pointer-events:none;white-space:nowrap;}",
+    ".wheel.unitd .wi{text-align:right;padding-right:calc(var(--ww,13vh) * .5);box-sizing:border-box;}",
+    ".wu{position:absolute;top:50%;left:56%;transform:translateY(-50%);font-size:calc(var(--wfs,4.4vh) * .5);font-weight:500;color:rgba(255,255,255,.9);pointer-events:none;white-space:nowrap;}",
     ".wheel.hrs{width:calc(var(--ww,13vh) * 1.2);}",
     ".wheel.hrs.unitd .wi{padding-right:calc(var(--ww,13vh) * .62);}",
-    ".wheel.hrs .wu{left:50%;}",
+    ".wheel.hrs .wu{left:52%;}",
     ".wheel.ampm{width:11vh;}",
     /* ===== timers (HA timer helpers) ===== */
     ".main{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:stretch;gap:2vh;width:100%;}",
@@ -739,7 +762,7 @@
     ".corner.plus{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.5);color:var(--es-hi2,#ffc266);}",
     ".corner ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;}",
     ".corner:active{transform:scale(.92);}",
-    ".tile{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;box-sizing:border-box;padding:2.4vh 2vh 2.6vh;border-radius:3.6vh;overflow:hidden;" +
+    ".tile{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;box-sizing:border-box;padding:2vh 2vh 2.2vh;border-radius:3.6vh;overflow:hidden;" +
       "background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.09);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);}",
     ".tile::before{content:'';position:absolute;left:0;top:0;right:0;bottom:0;border-radius:inherit;background:linear-gradient(180deg,rgba(255,69,58,.32),rgba(255,69,58,.1));opacity:0;pointer-events:none;}",
     ".tile.done{border-color:rgba(255,99,88,.6);}",
@@ -792,8 +815,9 @@
     ".ahint{font-size:2.5vh;opacity:.5;margin-top:1vh;}",
     ".awrap{width:100%;display:flex;flex-direction:column;align-items:center;}",
     /* new timer: wheels + quick picks + start */
-    ".add{--ww:12.4vh;}",
     ".chips{display:flex;flex-wrap:wrap;justify-content:center;gap:1.2vh;max-width:100%;}",
+    ".recents{display:flex;flex-direction:column;align-items:center;gap:1vh;max-width:100%;}",
+    ".rlbl{font-size:2.1vh;letter-spacing:.12em;text-transform:uppercase;opacity:.45;}",
     ".chip{height:6.4vh;min-width:10vh;padding:0 1.8vh;box-sizing:border-box;border-radius:3.2vh;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;font-size:2.7vh;cursor:pointer;white-space:nowrap;}",
     ".chip.sel{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.65);color:var(--es-hi2,#ffc266);}",
     ".go{height:9vh;border-radius:4.5vh;background:linear-gradient(180deg,#3ad16a,#27a84f);box-shadow:0 .8vh 2.4vh rgba(39,168,79,.3);display:flex;align-items:center;justify-content:center;font-size:3.6vh;cursor:pointer;width:var(--gow,46vh);max-width:94%;}",
@@ -1765,9 +1789,10 @@
     host.style.setProperty("--ring", (cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
     host.style.setProperty("--clock", (cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
     host.style.setProperty("--gow", (cols <= 1 ? 52 : cols === 2 ? 44 : 36) + "vh");
-    host.style.setProperty("--ww", (cols <= 1 ? 15 : cols === 2 ? 13 : 11) + "vh");
-    host.style.setProperty("--wrow", (cols <= 1 ? 7 : 6.4) + "vh");
-    host.style.setProperty("--wfs", (cols <= 1 ? 5 : cols === 2 ? 4.4 : 3.8) + "vh");
+    // Tall wheels: big rows are easier to flick and to land on with a finger.
+    host.style.setProperty("--ww", (cols <= 1 ? 20 : cols === 2 ? 15 : 11.6) + "vh");
+    host.style.setProperty("--wrow", (cols <= 1 ? 9 : cols === 2 ? 8.2 : 7.4) + "vh");
+    host.style.setProperty("--wfs", (cols <= 1 ? 6 : cols === 2 ? 5.2 : 4.6) + "vh");
 
     var h = "";
     for (var i = 0; i < items.length; i++) {
@@ -1831,15 +1856,16 @@
   };
 
   EchoClockCard.prototype._adderHtml = function (count, cols) {
-    var presets = this._config.presets, chips = "", max = cols >= 3 ? 3 : 6;
-    for (var i = 0; i < presets.length && i < max; i++) {
-      var p = presets[i];
-      chips += '<div class="chip" role="button" data-act="preset" data-min="' + p + '">' + (p >= 60 && p % 60 === 0 ? p / 60 + " hr" : p + " min") + "</div>";
+    // Recently used lengths, newest first (like iOS); the configured presets until there are any.
+    var rec = recentsLoad(), list = rec.length ? rec : this._config.presets.map(function (m) { return m * 60; });
+    var chips = "", max = cols >= 3 ? 2 : cols === 2 ? 3 : 6;
+    for (var i = 0; i < list.length && i < max; i++) {
+      chips += '<div class="chip" role="button" data-act="preset" data-sec="' + list[i] + '">' + esc(fmtLen(list[i])) + "</div>";
     }
     return '<div class="tile add">' +
       '<div class="cap">' + (count ? "Add a timer" : "New timer") + "</div>" +
       '<div class="wheels tw"></div>' +
-      '<div class="chips">' + chips + "</div>" +
+      '<div class="recents"><div class="rlbl">' + (rec.length ? "Recents" : "Quick picks") + '</div><div class="chips">' + chips + "</div></div>" +
       '<div class="go" role="button" data-act="start"><ha-icon icon="mdi:play"></ha-icon>Start</div>' +
       "</div>";
   };
@@ -1870,7 +1896,7 @@
     var secs = this._twSecs();
     var chips = this._mainEl.querySelectorAll(".chip");
     for (var i = 0; i < chips.length; i++) {
-      var on = parseInt(chips[i].getAttribute("data-min"), 10) * 60 === secs;
+      var on = parseInt(chips[i].getAttribute("data-sec"), 10) === secs;
       if (on !== chips[i].classList.contains("sel")) chips[i].classList.toggle("sel");
     }
     var go = this._mainEl.querySelector(".go");
@@ -1961,10 +1987,10 @@
     var timer = slot ? cfg.slots[slot - 1].timer : null;
     var scr = function (id) { return id.replace(/^script\./, ""); };
     if (act === "preset") {
-      var min = parseInt(el.getAttribute("data-min"), 10);
-      this._tw = { h: Math.floor(min / 60), m: min % 60, s: 0 };
+      var sec = parseInt(el.getAttribute("data-sec"), 10);
+      this._tw = { h: Math.floor(sec / 3600), m: Math.floor(sec / 60) % 60, s: sec % 60 };
       var tw = this._tw, w = this._twWheels || [];
-      if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(0, true); }
+      if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(tw.s, true); }
       this._paintAdder();
     } else if (act === "start") {
       var now = Date.now(), secs = this._twSecs();
@@ -1972,6 +1998,7 @@
       if (this._pending.start && now - this._pending.start < 1500) return; // debounce double taps
       this._pending.start = now;
       this._adding = false;
+      recentsAdd(secs);
       hass.callService("script", scr(cfg.start_script), { duration: secs, navigate: false, prefix: cfg.timer_prefix });
     } else if (act === "pause") {
       hass.callService("timer", "pause", { entity_id: timer });

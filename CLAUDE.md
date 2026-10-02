@@ -15,8 +15,12 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
   - `echo-notify.js`: full-screen alerts (NWS, persistent notifications `echo_*`, `echo_notify` events).
 - `dist/echo-show-dashboard.js`: built bundle, **committed**. HACS installs it.
 - `homeassistant/`: package (timer helpers and scripts), Jinja macros, blueprints, example dashboard.
+  `packages/echo_kiosk.yaml` + `custom_templates/echo_kiosk.py`: `shell_command.echo_kiosk`, which the settings
+  panel's Alarms tab calls (return_response) to read/set the tablet's `alarms.*` settings over its Remote API and to
+  upload the synthesized "Echo …" tones. It reads `echo_kiosk_<name>_url/_token` from secrets.yaml.
 - `test/`: `index.html` is a fake HA (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
   `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
+  `alarms-settings.js` drives the settings Alarms tab (fake `shell_command.echo_kiosk`; `?notones`, `?noshell`);
   `smoke.js` loads every card in Playwright; `validate_ha.py` checks the YAML/Jinja.
 
 ## Workflow

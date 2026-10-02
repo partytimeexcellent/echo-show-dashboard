@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+- **Alarm settings in the settings panel**: a new Alarms tab sets the Kiosk Satellite alarm settings of the tablet you're on: alarm volume (with Test), tone, snooze length, stop ringing after, ease in and its duration, sunrise length and the spoken phrase. Picking a tone plays it once on the tablet.
+- **11 new alarm tones** (Chime, Marimba, Bells, Gentle Beep, Kitchen Bell, Classic Alarm, Sunrise, Harp, Digital, Wind Chimes, Rising Pulse), original sounds made by the helper script and added to the tablet's sounds folder with one button.
+  - Needs the new `packages/echo_kiosk.yaml` and `custom_templates/echo_kiosk.py`, Remote management on in Kiosk Satellite and a token per tablet in `secrets.yaml` (see the README).
+- Timers: much taller hour/minute/second wheels, and the quick picks are now **Recents**, the last lengths you started on this display (the configured presets show until you've started one).
+- Weather: the hourly wind row shows just the number, a little larger.
+
 ## 1.3.0
 
 - **Clock** page (`echo-clock-card`, replaces the timers page; `echo-timer-card` still works as an alias). Reorganised like the iOS Clock app, with Alarms, Stopwatch and Timers tabs.
