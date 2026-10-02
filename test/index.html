@@ -131,6 +131,7 @@ var hass = {
   states: states,
   config: { latitude: 44, longitude: -123, unit_system: { temperature: "°F" }, time_zone: "America/Los_Angeles" },
   user: { is_admin: true, name: "Test" },
+  services: /[?&]noshell/.test(location.search) ? {} : { shell_command: { echo_kiosk: {} } },
   language: "en", locale: { language: "en" },
   callService: function (d, s, data) { calls.push([d, s, data]); return Promise.resolve(); },
   callWS: function (m) { calls.push(["ws", m.type]);

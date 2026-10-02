@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.4.0
+ * Echo Show Dashboard 1.5.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.4.0, echo-weather-card 1.7.2, echo-clock-card 2.1.0, echo-media-card 1.9.0, echo-notify 1.2.0
+ * echo-show-common 1.4.0, echo-weather-card 1.7.2, echo-clock-card 2.2.0, echo-media-card 1.9.0, echo-notify 1.2.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -2573,7 +2573,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.1.0";
+  var VERSION = "2.2.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -3297,6 +3297,9 @@
     ".tb{position:absolute;right:0;top:0;width:8vh;height:8vh;border-radius:50%;display:none;align-items:center;justify-content:center;cursor:pointer;background:rgba(var(--es-acc-rgb,255,159,10),.2);border:1px solid rgba(var(--es-acc-rgb,255,159,10),.5);color:var(--es-hi2,#ffc266);}",
     ".tb ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;}",
     ".root[data-tab=alarms] .tb.add-alarm{display:flex;}",
+    ".tbl{position:absolute;left:0;top:.8vh;height:6.4vh;padding:0 3vh;border-radius:3.2vh;display:none;align-items:center;font-size:3vh;cursor:pointer;color:var(--es-hi,#ffb340);background:rgba(255,255,255,.08);}",
+    ".root[data-tab=alarms] .tbl.edit-alarms.has{display:flex;}",
+    ".tbl:active{transform:scale(.95);}",
     ".tb:active,.sg:active{transform:scale(.95);}",
     /* panes */
     ".pane{position:relative;flex:1 1 auto;min-height:0;display:none;}",
@@ -3419,6 +3422,32 @@
     ".abtn.stop{background:#fff;color:#c4271d;font-weight:500;}",
     ".alist{flex:1 1 auto;min-height:0;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:min-content;gap:1.6vh;align-content:start;}",
     ".alist.one{grid-template-columns:1fr;}",
+    /* swipe-to-delete: the row slides left over a red Delete button */
+    ".aw{position:relative;border-radius:3vh;overflow:hidden;}",
+    ".adel{position:absolute;right:0;top:0;bottom:0;width:20vh;display:flex;align-items:center;justify-content:center;gap:1vh;background:#ff3b30;color:#fff;font-size:3vh;font-weight:500;cursor:pointer;opacity:0;}",
+    ".adel ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;}",
+    ".aw.reveal .adel{opacity:1;}",
+    ".aw .arow{position:relative;touch-action:pan-y;transition:transform .22s ease;background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03)),var(--es-pan2,#141b30);}",
+    ".aw.drag .arow{transition:none;}",
+    ".ax{display:none;flex:0 0 auto;width:7vh;height:7vh;margin-right:-.4vh;align-items:center;justify-content:center;color:#ff453a;cursor:pointer;}",
+    ".ax ha-icon{--mdc-icon-size:5.4vh;width:5.4vh;height:5.4vh;}",
+    ".alist.editing .ax{display:flex;}",
+    ".alist.editing .sw{display:none;}",
+    ".ax:active{transform:scale(.9);}",
+    /* alarm volume row */
+    ".avol{flex:0 0 auto;display:none;align-items:center;gap:1.6vh;margin:0 .4vh 1.6vh;}",
+    ".avol.on{display:flex;}",
+    ".avol > ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;color:rgba(255,255,255,.7);}",
+    ".avol .vl{font-size:2.8vh;color:rgba(255,255,255,.75);white-space:nowrap;}",
+    ".vtrack{position:relative;flex:1 1 auto;height:6.4vh;border-radius:3.2vh;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.08);overflow:hidden;touch-action:none;cursor:ew-resize;}",
+    ".vfill{position:absolute;left:0;top:0;bottom:0;width:100%;background:linear-gradient(90deg,var(--es-acc2,#ff8a00),var(--es-hi,#ffb340));transform-origin:left;}",
+    ".vv{position:absolute;right:2vh;top:0;bottom:0;display:flex;align-items:center;font-size:2.5vh;font-variant-numeric:tabular-nums;text-shadow:0 0 .6vh rgba(0,0,0,.6);}",
+    ".vtest{flex:0 0 auto;width:6.4vh;height:6.4vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(52,199,89,.2);border:1px solid rgba(52,199,89,.45);color:#5ee07f;}",
+    ".vtest ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;}",
+    ".vtest:active{transform:scale(.92);}",
+    ".avol.wait .vtrack{opacity:.5;}",
+    /* toast action */
+    ".toast .tact{margin-left:2.4vh;color:var(--es-hi,#ffb340);font-weight:500;cursor:pointer;pointer-events:auto;}",
     ".arow{display:flex;align-items:center;gap:2vh;padding:2vh 2.8vh;border-radius:3vh;cursor:pointer;background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.09);}",
     ".arow .ab{flex:1 1 auto;min-width:0;}",
     ".arow .tm{font-size:9vh;font-weight:300;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}",
@@ -3672,8 +3701,13 @@
     root.innerHTML = "<style>" + STYLE + "</style>" +
       '<div class="root"><div class="content">' +
       '<div class="top">' + (cfg.tabs.length > 1 ? '<div class="seg">' + seg + "</div>" : "") +
+      '<div class="tbl edit-alarms" role="button">Edit</div>' +
       '<div class="tb add-alarm" role="button"><ha-icon icon="mdi:plus"></ha-icon></div></div>' +
-      '<div class="pane p-alarms"><div class="anext"></div><div class="aring"></div><div class="alist"></div>' +
+      '<div class="pane p-alarms"><div class="anext"></div>' +
+      '<div class="avol"><ha-icon icon="mdi:volume-high"></ha-icon><span class="vl">Alarm volume</span>' +
+      '<div class="vtrack"><div class="vfill"></div><div class="vv"></div></div>' +
+      '<div class="vtest" role="button"><ha-icon icon="mdi:play"></ha-icon></div></div>' +
+      '<div class="aring"></div><div class="alist"></div>' +
       '<div class="afoot"><ha-icon icon="mdi:shield-check-outline"></ha-icon>Alarms ring from this display’s own clock, even when Home Assistant or Wi-Fi is down.</div></div>' +
       '<div class="pane p-sw"><div class="swl"><div class="swd">00:00.00</div><div class="swb">' +
       '<div class="circ grey" role="button" data-sw="left">Lap</div><div class="circ green" role="button" data-sw="right">Start</div></div></div>' +
@@ -3712,15 +3746,25 @@
 
     // alarms
     this._aList.addEventListener("click", function (ev) {
+      if (Date.now() - (self._swipedAt || 0) < 400) return;      // the end of a swipe, not a tap
       var t = ev.target.closest ? ev.target.closest("[data-a]") : null;
       if (!t) return;
       var act = t.getAttribute("data-a");
       if (act === "retry") { self._alarmsLoad(true); return; }
       var a = self._alarms && self._alarms[parseInt(t.getAttribute("data-k"), 10)];
       if (!a) return;
+      if (act === "del") { ev.stopPropagation(); self._alarmDelete(a); return; }
+      if (self._swOpen) { self._swClose(); return; }               // a tap elsewhere closes an open row
       if (act === "toggle") { ev.stopPropagation(); self._alarmToggle(a); }
-      else if (act === "edit") self._openSheet(a);
+      else if (act === "edit" && !self._editing) self._openSheet(a);
     });
+    this._bindSwipe();
+    root.querySelector(".edit-alarms").addEventListener("click", function () {
+      self._editing = !self._editing;
+      self._swClose();
+      self._paintAlarms();
+    });
+    this._bindVolume();
     this._aRing.addEventListener("click", function (ev) {
       var t = ev.target.closest ? ev.target.closest("[data-press]") : null;
       if (t && self._hass) self._hass.callService("button", "press", { entity_id: t.getAttribute("data-press") });
@@ -3791,6 +3835,7 @@
     if (id === "stopwatch") this._paintSw();
     else this._swStopRaf();
     if (id === "alarms") this._alarmsShow();
+    else if (this._editing) { this._editing = false; this._paintAlarms(); }
   };
 
   // Which tab a visit opens on: Timers when one is ringing or just started (by voice, say),
@@ -3823,13 +3868,21 @@
     }
   };
 
-  EchoClockCard.prototype._toast = function (msg) {
+  EchoClockCard.prototype._toast = function (msg, actLabel, act) {
     var el = this._toastEl;
     if (!el) return;
     el.textContent = msg;
+    if (actLabel) {
+      var b = document.createElement("span");
+      b.className = "tact";
+      b.setAttribute("role", "button");
+      b.textContent = actLabel;
+      b.addEventListener("click", function () { el.classList.remove("on"); act(); });
+      el.appendChild(b);
+    }
     el.classList.add("on");
     if (this._toastT) clearTimeout(this._toastT);
-    this._toastT = setTimeout(function () { el.classList.remove("on"); }, 4200);
+    this._toastT = setTimeout(function () { el.classList.remove("on"); }, actLabel ? 6500 : 4200);
   };
 
   EchoClockCard.prototype._h24 = function () {
@@ -3955,6 +4008,7 @@
     }
     this._paintAlarms();
     if (!this._lastLoad || Date.now() - this._lastLoad > 20000) this._alarmsLoad(false);
+    this._volLoad();
     var self = this;
     if (!this._nextT) this._nextT = setInterval(function () {
       if (!self.isConnected) { clearInterval(self._nextT); self._nextT = null; return; }
@@ -4041,13 +4095,23 @@
       list.forEach(function (a, k) {
         var d = daysText(daysOf(a));
         var lb = (a.label || "Alarm") + (d ? ", " + d : "");
-        h += '<div class="arow' + (a.on ? "" : " off") + (self._alarmBusy[a.time + "|" + (a.label || "")] ? " busy" : "") + '" role="button" data-a="edit" data-k="' + k + '">' +
+        h += '<div class="aw" data-k="' + k + '"><div class="adel" role="button" data-a="del" data-k="' + k + '"><ha-icon icon="mdi:delete-outline"></ha-icon>Delete</div>' +
+          '<div class="arow' + (a.on ? "" : " off") + (self._alarmBusy[a.time + "|" + (a.label || "")] ? " busy" : "") + '" role="button" data-a="edit" data-k="' + k + '">' +
+          '<div class="ax" role="button" data-a="del" data-k="' + k + '"><ha-icon icon="mdi:close-circle"></ha-icon></div>' +
           '<div class="ab"><div class="tm">' + self._fmtTime(a.time, true) + '</div><div class="lb">' + esc(lb) + "</div></div>" +
-          '<div class="sw' + (a.on ? " on" : "") + '" role="switch" data-a="toggle" data-k="' + k + '"></div></div>';
+          '<div class="sw' + (a.on ? " on" : "") + '" role="switch" data-a="toggle" data-k="' + k + '"></div></div></div>';
       });
     }
-    this._aList.className = "alist" + (!list || list.length < 3 ? " one" : "");
+    if (!list || !list.length) this._editing = false;
+    this._aList.className = "alist" + (!list || list.length < 3 ? " one" : "") + (this._editing ? " editing" : "");
     this._aList.innerHTML = h;
+    this._swOpen = null;
+    var eb = this.shadowRoot.querySelector(".edit-alarms");
+    if (eb) {
+      eb.textContent = this._editing ? "Done" : "Edit";
+      var has = !!(list && list.length);
+      if (has !== eb.classList.contains("has")) eb.classList.toggle("has");
+    }
     this._paintNext();
     this._badges();
   };
@@ -4096,6 +4160,176 @@
     var d = new Date(ts);
     return (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
   }
+
+  // ----- swipe to delete -----
+
+  EchoClockCard.prototype._swClose = function () {
+    var w = this._swOpen;
+    this._swOpen = null;
+    if (!w) return;
+    var row = w.querySelector(".arow");
+    row.style.transform = "";
+    setTimeout(function () { w.classList.remove("reveal"); }, 230);
+  };
+
+  EchoClockCard.prototype._bindSwipe = function () {
+    var self = this, list = this._aList, d = null;
+    list.addEventListener("pointerdown", function (ev) {
+      if (self._editing || ev.button > 0) return;
+      var w = ev.target.closest ? ev.target.closest(".aw") : null;
+      if (!w || (ev.target.closest && ev.target.closest(".sw,.adel"))) return;
+      if (self._swOpen && self._swOpen !== w) self._swClose();
+      var del = w.querySelector(".adel").getBoundingClientRect().width;
+      d = { w: w, row: w.querySelector(".arow"), x: ev.clientX, y: ev.clientY, base: self._swOpen === w ? -del : 0, max: del, horiz: null, id: ev.pointerId };
+    });
+    list.addEventListener("pointermove", function (ev) {
+      if (!d || ev.pointerId !== d.id) return;
+      var dx = ev.clientX - d.x, dy = ev.clientY - d.y;
+      if (d.horiz === null) {
+        if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+          d.horiz = true;
+          d.w.classList.add("drag", "reveal");
+          try { d.row.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+        } else if (Math.abs(dy) > 10) { d = null; return; }
+      }
+      if (!d.horiz) return;
+      var x = Math.max(-d.max * 1.25, Math.min(0, d.base + dx));
+      d.row.style.transform = "translateX(" + x + "px)";
+      ev.preventDefault();
+    });
+    function end(ev) {
+      if (!d) return;
+      var dd = d;
+      d = null;
+      if (!dd.horiz) return;
+      self._swipedAt = Date.now();
+      dd.w.classList.remove("drag");
+      var x = parseFloat((dd.row.style.transform.match(/-?[\d.]+/) || [0])[0]);
+      if (x < -dd.max / 2) {
+        dd.row.style.transform = "translateX(" + (-dd.max) + "px)";
+        self._swOpen = dd.w;
+      } else {
+        self._swOpen = dd.w;
+        self._swClose();
+      }
+    }
+    list.addEventListener("pointerup", end);
+    list.addEventListener("pointercancel", end);
+  };
+
+  // ----- delete, with Undo -----
+
+  EchoClockCard.prototype._alarmDelete = function (a) {
+    var self = this, key = a.time + "|" + (a.label || "");
+    if (this._alarmBusy[key]) return;
+    this._alarmBusy[key] = true;
+    this._swOpen = null;
+    var copy = { time: a.time, days: daysOf(a).slice(), label: a.label || "", on: a.on };
+    this._req({ action: "delete", time: a.time, label: a.label || "" }).then(function (r) {
+      delete self._alarmBusy[key];
+      if (r && r.ok) {
+        if (self._alarms) self._alarms = self._alarms.filter(function (x) { return x !== a; });
+        self._paintAlarms();
+        self._toast((copy.label || "Alarm") + " at " + self._fmtTime(copy.time) + " deleted.", "Undo", function () { self._alarmRestore(copy); });
+      } else {
+        self._toast(self._errText(r));
+        self._paintAlarms();
+      }
+      self._alarmsLoad(true);
+    });
+  };
+
+  EchoClockCard.prototype._alarmRestore = function (c) {
+    var self = this;
+    this._req({ action: "set", time: c.time, days: c.days, label: c.label }).then(function (r) {
+      if (r && r.ok && !c.on) return self._req({ action: "turn_off", time: c.time, label: c.label });
+      return r;
+    }).then(function (r) {
+      if (r && r.ok === false) self._toast(self._errText(r));
+      self._alarmsLoad(true);
+    });
+  };
+
+  // ----- alarm volume (Kiosk Satellite's alarms.volume, through shell_command.echo_kiosk) -----
+
+  EchoClockCard.prototype._ksAvail = function () {
+    var sv = this._hass && this._hass.services;
+    return !!(sv && sv.shell_command && sv.shell_command.echo_kiosk) && !!this._kiosk();
+  };
+
+  EchoClockCard.prototype._ksCall = function (op, data) {
+    var kiosk = (this._kiosk() + " " + (this._devSlug || "")).trim();
+    return this._hass.callWS({ type: "call_service", domain: "shell_command", service: "echo_kiosk", service_data: { kiosk: kiosk, op: op, data: data || {} }, return_response: true })
+      .then(function (r) {
+        try { return JSON.parse(((r && r.response) || {}).stdout || ""); } catch (e) { return { ok: false }; }
+      }, function () { return { ok: false }; });
+  };
+
+  EchoClockCard.prototype._volLoad = function () {
+    var self = this;
+    if (!this._ksAvail()) { this._paintVol(); return; }
+    if (this._volBusy || (this._volAt && Date.now() - this._volAt < 15000)) { this._paintVol(); return; }
+    this._volBusy = true;
+    this._ksCall("get").then(function (r) {
+      self._volBusy = false;
+      self._volAt = Date.now();
+      if (r && r.ok && r.settings) {
+        self._vol = Math.round((parseFloat(r.settings["alarms.volume"]) || 0.7) * 100);
+        self._volTone = r.settings["alarms.tone"] || "";
+      }
+      self._paintVol();
+    });
+  };
+
+  EchoClockCard.prototype._paintVol = function () {
+    var el = this.shadowRoot && this.shadowRoot.querySelector(".avol");
+    if (!el) return;
+    var show = this._ksAvail() && this._vol !== undefined;
+    if (show !== el.classList.contains("on")) el.classList.toggle("on");
+    if (!show) return;
+    var v = this._volDrag !== undefined ? this._volDrag : this._vol;
+    el.querySelector(".vfill").style.transform = "scaleX(" + ((v - 5) / 95).toFixed(3) + ")";
+    el.querySelector(".vv").textContent = v + "%";
+  };
+
+  EchoClockCard.prototype._bindVolume = function () {
+    var self = this, el = this.shadowRoot.querySelector(".avol"), tr = el.querySelector(".vtrack"), drag = false;
+    function at(x) {
+      var r = tr.getBoundingClientRect();
+      var f = Math.max(0, Math.min(1, (x - r.left) / r.width));
+      self._volDrag = Math.round((5 + f * 95) / 5) * 5;
+      self._paintVol();
+    }
+    tr.addEventListener("pointerdown", function (ev) {
+      drag = true;
+      try { tr.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      at(ev.clientX);
+      ev.preventDefault();
+    });
+    tr.addEventListener("pointermove", function (ev) { if (drag) at(ev.clientX); });
+    function end() {
+      if (!drag) return;
+      drag = false;
+      var v = self._volDrag;
+      self._volDrag = undefined;
+      if (v === undefined) return;
+      self._vol = v;
+      self._paintVol();
+      el.classList.add("wait");
+      // Save, then play the tone once at the new volume so you can hear it.
+      self._ksCall("set", { "alarms.volume": v / 100 }).then(function (r) {
+        el.classList.remove("wait");
+        if (!r || !r.ok) { self._toast("The tablet didn\u2019t take the new volume."); self._volAt = 0; self._volLoad(); return; }
+        self._volAt = Date.now();
+        self._ksCall("test", { tone: self._volTone || "builtin" });
+      });
+    }
+    tr.addEventListener("pointerup", end);
+    tr.addEventListener("pointercancel", end);
+    el.querySelector(".vtest").addEventListener("click", function () {
+      self._ksCall("test", { tone: self._volTone || "builtin" });
+    });
+  };
 
   EchoClockCard.prototype._alarmToggle = function (a) {
     var self = this, key = a.time + "|" + (a.label || "");
@@ -7530,6 +7764,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.4.0", cards: ["echo-show-common 1.4.0","echo-weather-card 1.7.2","echo-clock-card 2.1.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
-  console.info("%c Echo Show Dashboard 1.4.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.5.0", cards: ["echo-show-common 1.4.0","echo-weather-card 1.7.2","echo-clock-card 2.2.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
+  console.info("%c Echo Show Dashboard 1.5.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

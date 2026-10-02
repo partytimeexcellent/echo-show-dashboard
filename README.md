@@ -167,6 +167,8 @@ The settings panel's **Alarms** tab sets the tablet's own Kiosk Satellite alarm 
 
 The token stays in `secrets.yaml`; the script never prints it, and only `alarms.*` settings can be changed through it.
 
+To delete an alarm, swipe its row to the left and tap **Delete**, or tap **Edit** and then the ✕ on a row; **Undo** brings it back for a few seconds. With the alarm-settings helper installed, the Alarms tab also has an alarm volume slider that plays the tone once when you let go.
+
 Kiosk Satellite has no "edit" request, so editing an alarm deletes it and sets the new one. Alarms are matched by time and label, so two alarms at the same time need different labels to be edited here.
 
 A button with `action: timer-settings` opens the alarm settings (volume, tone, test). Its `settings: {device_volume_entity: number.x}` lets **Test** use the display's real volume.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0
+
+- Clock › Alarms: **delete alarms** by swiping a row to the left and tapping Delete, or with **Edit** (top left), which puts a ✕ on every row. A deleted alarm can be brought back with **Undo** for a few seconds.
+- Clock › Alarms: an **Alarm volume** slider at the top, with a play button. Letting go of the slider saves the volume to the tablet and plays the alarm tone once at that level. It shows when the alarm-settings helper (`shell_command.echo_kiosk`) is installed.
+- The alarm-settings helper has a `logs` op that returns the tablet's recent alarm and sound log lines, for troubleshooting.
+
 ## 1.4.0
 
 - **Alarm settings in the settings panel**: a new Alarms tab sets the Kiosk Satellite alarm settings of the tablet you're on: alarm volume (with Test), tone, snooze length, stop ringing after, ease in and its duration, sunrise length and the spoken phrase. Picking a tone plays it once on the tablet.
