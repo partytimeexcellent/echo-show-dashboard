@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1
+
+- Settings › General: the **Microphone** tile now turns Kiosk Satellite's own **Mute microphone** (`voice.mute`) on and off over the tablet's Remote API, so "Off" really stops the wake word. It used to flip `switch.<device>_mute`, the old dashboard Voice Satellite's mute, which the native wake word ignores. The tile shows the live state from the **VS Mute** entity when the tablet exposes it.
+  - Uses the alarm-settings helper (`shell_command.echo_kiosk`, new ops `mic` and `mic_set`); update `custom_templates/echo_kiosk.py`. Without the helper the tile falls back to the VS Mute switch, then the old switch, with a note.
+
 ## 1.6.0
 
 - **Climate page** (`echo-climate-card`): a smart thermostat run by Home Assistant.

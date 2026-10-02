@@ -14,9 +14,11 @@ script reads the two secrets per tablet and makes the request:
     echo_kiosk_<name>_token: <long-lived token from POST /api/login with ttl_days>
 
 Usage: echo_kiosk.py <base64 kiosk name> <op> <base64 JSON data>
-Prints one JSON object. Ops: get, set, test, stop, install_tones, devices, logs.
+Prints one JSON object. Ops: get, set, test, stop, install_tones, devices, logs,
+mic, mic_set.
 
-Only the alarm settings (alarms.*) can be read or changed through it. Standard
+Only the alarm settings (alarms.*) and the microphone mute (voice.mute, ops mic and
+mic_set) can be read or changed through it. Standard
 library only, so it runs inside the Home Assistant container as is.
 """
 import base64
@@ -42,6 +44,8 @@ KEYS = [
     "alarms.snooze_minutes", "alarms.silence_after_minutes", "alarms.sunrise_minutes",
     "alarms.phrase",
 ]
+# Voice Satellite's "Mute microphone": on stops wake word listening and closes the mic.
+MIC_KEY = "voice.mute"
 TONE_PREFIX = "Echo "
 
 
@@ -140,13 +144,28 @@ def sounds(base, token):
     return data.get("sounds") or []
 
 
-def get_settings(base, token):
+def get_settings(base, token, keys=None):
+    keys = KEYS if keys is None else keys
     r = call(base, token, "GET", "/api/settings")
     vals = {}
     for d in (r or {}).get("settings") or []:
-        if d.get("key") in KEYS:
+        if d.get("key") in keys:
             vals[d["key"]] = d.get("value", d.get("default"))
     return vals
+
+
+def truthy(v):
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "on", "yes")
+    return bool(v)
+
+
+def mic_state(base, token):
+    vals = get_settings(base, token, [MIC_KEY])
+    if MIC_KEY not in vals:
+        out({"ok": False, "error": "no_setting",
+             "message": "This Kiosk Satellite version has no %s setting." % MIC_KEY})
+    return truthy(vals[MIC_KEY])
 
 
 # ---------- ringtones ----------
@@ -360,6 +379,15 @@ def main():
         bad = r.get("rejected") or []
         out({"ok": not bad, "rejected": bad, "errors": r.get("errors") or {},
              "settings": get_settings(base, token)})
+    if op == "mic":
+        out({"ok": True, "tablet": key, "muted": mic_state(base, token)})
+    if op == "mic_set":
+        want = truthy(data.get("muted"))
+        r = call(base, token, "PATCH", "/api/settings", {MIC_KEY: want}) or {}
+        bad = r.get("rejected") or []
+        muted = mic_state(base, token)
+        out({"ok": not bad and muted == want, "muted": muted, "rejected": bad,
+             "message": (r.get("errors") or {}).get(MIC_KEY) or ("" if muted == want else "The tablet kept the old setting.")})
     if op == "test":
         tone = str(data.get("tone", ""))
         call(base, token, "POST", "/api/commands/previewAlarmTone", {"tone": tone})

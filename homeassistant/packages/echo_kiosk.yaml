@@ -2,7 +2,8 @@
 # https://github.com/partytimeexcellent/echo-show-dashboard
 #
 # Lets the settings panel's Alarms tab read and change each tablet's Kiosk Satellite
-# alarm settings (volume, tone, snooze, ease-in, sunrise, phrase) and add ringtones.
+# alarm settings (volume, tone, snooze, ease-in, sunrise, phrase) and add ringtones,
+# and lets the General tab's Microphone tile mute the tablet's Voice Satellite.
 # Home Assistant runs a small script that talks to the tablet's Remote API.
 #
 # Install:
@@ -22,7 +23,8 @@
 #   6. Restart Home Assistant.
 #
 # The token works like the admin password and can't be revoked, so it stays in
-# secrets.yaml; the script never prints it. Only alarms.* settings can be changed.
+# secrets.yaml; the script never prints it. Only alarms.* settings and voice.mute
+# can be changed.
 
 shell_command:
   echo_kiosk: >-

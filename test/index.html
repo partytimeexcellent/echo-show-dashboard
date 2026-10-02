@@ -112,6 +112,7 @@ function kiosk(req) {
 }
 var listeners = {};
 // A fake echo_kiosk.py (shell_command.echo_kiosk): the tablet's alarm settings and sounds.
+var ksMuted = /[?&]micoff/.test(location.search);
 var ksSettings = { "alarms.volume": 0.7, "alarms.tone": "", "alarms.ease_in": true, "alarms.ease_in_seconds": 30, "alarms.snooze_minutes": "10", "alarms.silence_after_minutes": "10", "alarms.sunrise_minutes": "30", "alarms.phrase": "It's {time}. {label}" };
 var ksTones = ["Chime", "Marimba", "Bells", "Gentle Beep", "Kitchen Bell", "Classic Alarm", "Sunrise", "Harp", "Digital", "Wind Chimes", "Rising Pulse"].map(function (n) { return "Echo " + n + ".wav"; });
 var ksSounds = /[?&]notones/.test(location.search) ? ["doorbell.mp3"] : ksTones.concat(["doorbell.mp3"]);
@@ -120,6 +121,8 @@ function echoKiosk(op, data) {
   var out;
   if (op === "get") out = { ok: true, tablet: "kitchen", settings: Object.assign({}, ksSettings), sounds: ksSounds.slice(), tones: ksTones };
   else if (op === "set") { Object.assign(ksSettings, data); out = { ok: true, rejected: [], settings: Object.assign({}, ksSettings) }; }
+  else if (op === "mic") out = { ok: true, tablet: "kitchen", muted: !!ksMuted };
+  else if (op === "mic_set") { ksMuted = !!data.muted; out = { ok: true, muted: ksMuted, rejected: [] }; }
   else if (op === "install_tones") { ksSounds = ksTones.concat(["doorbell.mp3"]); out = { ok: true, added: ksTones, sounds: ksSounds.slice() }; }
   else out = { ok: true };
   return new Promise(function (r) { setTimeout(function () { r({ response: { stdout: JSON.stringify(out), stderr: "", returncode: 0 } }); }, 200); });

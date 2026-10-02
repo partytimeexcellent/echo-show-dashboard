@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.5.0";
+  var VERSION = "1.6.1";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -378,6 +378,7 @@
     this._hass = hass;
     lastHass = hass || lastHass;
     this._ctx = ctx || {};
+    this._mic = null;                   // re-read the tablet's microphone mute on every open
     if (this._ctx.tab) this._tab = this._ctx.tab;
     this._build();
     document.body.appendChild(this);
@@ -468,6 +469,7 @@
   EchoShowSettings.prototype._refresh = function (force) {
     if (!this._built || !this._hass || this._drag) return;
     if (this._tab === "alarms" && !this._ks) this._ksLoad();
+    if (this._tab === "general" && this._device && !this._mic) this._micLoad();
     var ae = this.shadowRoot.activeElement;
     if (ae && ae.tagName === "INPUT") return;      // don't wipe what is being typed
     var html = this["_tab_" + this._tab] ? this["_tab_" + this._tab]() : "";
@@ -484,7 +486,7 @@
   // --- small builders ---
   EchoShowSettings.prototype._tile = function (id, icon, label, on, sub, act) {
     if (!id) return "";
-    var st = this._st(id), na = !st || st.state === "unavailable";
+    var st = this._st(id), na = id.indexOf(".") > 0 && (!st || st.state === "unavailable");   // ids without a dot aren't entities
     return '<div class="tl' + (on ? " on" : "") + (na ? " na" : "") + '" role="button" data-a="' + (act || "toggle") + '" data-id="' + esc(id) + '">' +
       '<ha-icon icon="' + icon + '"></ha-icon><div><div class="n">' + esc(label) + '</div><div class="s">' + esc(na ? "Unavailable" : sub) + "</div></div></div>";
   };
@@ -517,17 +519,62 @@
       ". Add <b>echo_show: device: &lt;entity prefix&gt;</b> to the dashboard's raw config, e.g. <b>kitchen_echo_show_8</b> for switch.kitchen_echo_show_8_mute.</div>";
   };
 
+  // --- Microphone: Kiosk Satellite's "Mute microphone" (setting voice.mute) ---
+  // Set over the tablet's Remote API through shell_command.echo_kiosk, the same route as the
+  // Alarms tab. switch.<dev>_mute is the old dashboard Voice Satellite's mute and doesn't stop
+  // the native wake word, so it is only a last resort when the helper isn't installed.
+  EchoShowSettings.prototype._micLoad = function () {
+    var self = this;
+    this._mic = { loading: true };
+    this._ksCall("mic").then(function (r) {
+      self._mic = r && r.ok ? { api: true, muted: !!r.muted } : { api: false, why: (r && (r.message || r.error)) || "" };
+      if (self._tab === "general") self._refresh(false);
+    });
+  };
+  EchoShowSettings.prototype._micState = function () {
+    var m = this._mic || {}, vs = this._dev("switch", "vs_mute"), old = this._dev("switch", "mute");
+    var hold = this._local.mic && this._local.mic.until > Date.now() ? this._local.mic.v : undefined;
+    var live = vs && this._st(vs) && /^(on|off)$/.test(this._st(vs).state) ? this._isOn(vs) : undefined;
+    if (m.api) return { muted: hold !== undefined ? hold : live !== undefined ? live : m.muted, via: "api" };
+    if (m.loading) return vs || old ? { muted: hold !== undefined ? hold : live !== undefined ? live : null, via: "wait" } : { muted: null, via: "wait" };
+    if (vs) return { muted: hold !== undefined ? hold : !!live, via: "entity", id: vs };
+    if (old) return { muted: hold !== undefined ? hold : this._isOn(old), via: "entity", id: old, legacy: true };
+    return null;
+  };
+  EchoShowSettings.prototype._micToggle = function () {
+    var self = this, ms = this._micState();
+    if (!ms || ms.muted === null || ms.via === "wait") return;
+    var want = !ms.muted;
+    this._local.mic = { v: want, until: Date.now() + 8000 };
+    if (this._mic) this._mic.msg = null;
+    this._refresh(false);
+    if (ms.via === "entity") {
+      this._hass.callService("switch", want ? "turn_on" : "turn_off", { entity_id: ms.id });
+      return;
+    }
+    this._ksCall("mic_set", { muted: want }).then(function (r) {
+      var m = self._mic || (self._mic = { api: true });
+      if (r && typeof r.muted === "boolean") m.muted = r.muted;
+      if (!r || !r.ok) {
+        m.msg = "Couldn't " + (want ? "turn the microphone off" : "turn the microphone on") + ": " + ((r && (r.message || r.error)) || "no answer from the tablet.");
+        self._local.mic = null;
+      } else self._local.mic = { v: r.muted, until: Date.now() + 4000 };
+      if (self._tab === "general") self._refresh(false);
+    });
+  };
+
   // --- tabs ---
   EchoShowSettings.prototype._tab_general = function () {
     if (!this._device) return this._noDevice();
-    var mic = this._dev("switch", "mute"), cam = this._dev("switch", "camera_enabled");
+    var cam = this._dev("switch", "camera_enabled");
     var wake = this._dev("switch", "wake_sound"), sat = this._dev("switch", "voice_satellite");
     var vol = this._dev("number", "volume"), avol = this._dev("number", "assistant_volume"), mvol = this._dev("number", "media_volume");
     var sens = this._dev("select", "wake_word_sensitivity");
     var h = '<div class="sec">Privacy</div><div class="tiles">';
-    if (mic) {
-      // The Kiosk Satellite switch is "Mute": on = microphone off.
-      var muted = this._isOn(mic), mt = this._tile(mic, muted ? "mdi:microphone-off" : "mdi:microphone", "Microphone", !muted, muted ? "Off · not listening" : "On", "toggle");
+    var ms = this._micState();
+    if (ms) {
+      var muted = ms.muted, mt = this._tile("mic", muted ? "mdi:microphone-off" : "mdi:microphone", "Microphone", muted === false,
+        muted === null ? "…" : muted ? "Off · not listening" : "On", "mic");
       h += muted ? mt.replace('class="tl', 'class="tl alert') : mt;
     }
     if (cam) { var c = this._isOn(cam); h += this._tile(cam, c ? "mdi:camera" : "mdi:camera-off", "Camera", c, c ? "On" : "Off · motion wake off too", "toggle"); }
@@ -536,6 +583,9 @@
     if (sat) { var s = this._isOn(sat); h += this._tile(sat, s ? "mdi:account-voice" : "mdi:account-voice-off", "Voice assistant", s, s ? "On" : "Off", "toggle"); }
     if (wake) { var w = this._isOn(wake); h += this._tile(wake, w ? "mdi:bullhorn" : "mdi:bullhorn-outline", "Wake sound", w, w ? "Beep when listening" : "Silent", "toggle"); }
     h += "</div>";
+    if (this._mic && this._mic.msg) h += '<div class="note warn">' + esc(this._mic.msg) + "</div>";
+    else if (ms && ms.legacy) h += '<div class="note warn">Microphone is using the old mute switch, which may not stop the wake word. ' +
+      esc((this._mic && this._mic.why) || "The tablet's Remote API isn't reachable.") + "</div>";
     if (vol || avol || mvol) {
       h += '<div class="sec">Volume</div>';
       if (vol) h += this._slider(vol, "mdi:volume-high", "Device", this._numVal(vol), 0, 100, "%", "number");
@@ -905,7 +955,9 @@
   // --- actions ---
   EchoShowSettings.prototype._act = function (a, el) {
     var h = this._hass, id = el.getAttribute("data-id"), v = el.getAttribute("data-v"), k = el.getAttribute("data-k");
-    if (a === "toggle" && id) {
+    if (a === "mic") {
+      this._micToggle();
+    } else if (a === "toggle" && id) {
       var on = this._isOn(id);
       this._hold(id, on ? "off" : "on");
       h.callService(id.split(".")[0] === "light" ? "light" : "switch", on ? "turn_off" : "turn_on", { entity_id: id });

@@ -191,7 +191,9 @@ The settings panel's **Alarms** tab sets the tablet's own Kiosk Satellite alarm 
    ```
 5. Restart Home Assistant.
 
-The token stays in `secrets.yaml`; the script never prints it, and only `alarms.*` settings can be changed through it.
+The same helper drives the **Microphone** tile on the settings panel's General tab: it sets Kiosk Satellite's own **Mute microphone** (`voice.mute`), which stops the wake word and closes the microphone. Without the helper the tile falls back to the **VS Mute** switch (or the older `switch.<device>_mute`).
+
+The token stays in `secrets.yaml`; the script never prints it, and only `alarms.*` settings and `voice.mute` can be changed through it.
 
 To delete an alarm, swipe its row to the left and tap **Delete**, or tap **Edit** and then the ✕ on a row; **Undo** brings it back for a few seconds. With the alarm-settings helper installed, the Alarms tab also has an alarm volume slider that plays the tone once when you let go.
 
