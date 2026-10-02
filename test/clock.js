@@ -56,7 +56,7 @@ const path = require("path");
   await p.evaluate(() => { ["1", "2"].forEach((n) => { states["timer.echo_timer_" + n] = Object.assign({}, states["timer.echo_timer_" + n], { state: "idle" }); states["input_text.echo_timer_" + n + "_name"] = Object.assign({}, states["input_text.echo_timer_" + n + "_name"], { state: "" }); }); card.hass = Object.assign({}, hass, { states: Object.assign({}, states) }); });
   await wait(600);
   await p.screenshot({ path: out("c-timer-new") });
-  await sr('.chip[data-min="10"]'); await wait(600);
+  await sr('.chip[data-sec="600"]'); await wait(600);
   await sr(".go"); await wait(200);
   console.log("start call:", JSON.stringify(await p.evaluate(() => calls.filter((c) => c[0] === "script").pop())));
   // Two timers + adder (three columns).
