@@ -24,6 +24,7 @@ var FILES = [
   "echo-weather-card.js",
   "echo-clock-card.js",
   "echo-media-card.js",
+  "echo-climate-card.js",
   "echo-notify.js",
 ];
 

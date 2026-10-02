@@ -1,0 +1,274 @@
+# Echo Show Dashboard: house mode
+# https://github.com/partytimeexcellent/echo-show-dashboard
+#
+# One place that decides what the house is doing: home, night, away or vacation. The climate
+# card uses it today; anything else (a security system, lights, notifications) can follow the
+# same signal later instead of each doing its own presence logic.
+#
+#   sensor.echo_house_mode         home | night | away | vacation  (the one to follow)
+#     attributes: occupied, source (auto / override / vacation), override, reason,
+#                 people_home, people_away, people_unknown, since
+#   binary_sensor.echo_house_occupied
+#                                  someone (or a guest) is home, with an away delay so a
+#                                  phone dropping off Wi-Fi for a minute doesn't flip it
+#   sensor.echo_house_settings     what the dashboard and voice set (see script below)
+#   script.echo_house_set          change the settings:
+#                                    override: auto | home | away   (when presence acts up)
+#                                    override_until: arrival | departure | manual
+#                                    guests, vacation: true/false
+#                                    away_delay (minutes), night_start / night_end ("HH:MM"),
+#                                    night: true/false (use the night mode at all)
+#   event echo_house_mode_changed  fired on every change: {from, to, reason}
+#
+# Presence comes from every person.* entity (a person counts as home only in the "home"
+# state). To use only some people, set `people:` in the settings sensor below.
+#
+# Install: copy to <config>/packages/echo_house.yaml (packages must be enabled, see
+# echo_show.yaml) and restart Home Assistant.
+#
+# ---- Adding a security system later -------------------------------------------------
+# Follow sensor.echo_house_mode, e.g. with the built-in Manual alarm panel:
+#
+#   alarm_control_panel:
+#     - platform: manual
+#       name: House Alarm
+#   automation:
+#     - alias: "House alarm follows house mode"
+#       triggers:
+#         - trigger: state
+#           entity_id: sensor.echo_house_mode
+#       actions:
+#         - choose:
+#             - conditions: "{{ trigger.to_state.state in ['away', 'vacation'] }}"
+#               sequence: [{action: alarm_control_panel.alarm_arm_away, target: {entity_id: alarm_control_panel.house_alarm}}]
+#             - conditions: "{{ trigger.to_state.state == 'night' }}"
+#               sequence: [{action: alarm_control_panel.alarm_arm_night, target: {entity_id: alarm_control_panel.house_alarm}}]
+#           default:
+#             - action: alarm_control_panel.alarm_disarm
+#               target: {entity_id: alarm_control_panel.house_alarm}
+#               data: {code: !secret alarm_code}
+#
+# The manual override is what makes this safe to automate: when presence detection is
+# wrong, one tap on the dashboard (or "set the house to home") puts the whole house right.
+
+template:
+  # Settings, kept across restarts. Changed only through script.echo_house_set.
+  - triggers:
+      - trigger: event
+        event_type: echo_house_set
+        id: set
+      - trigger: homeassistant
+        event: start
+        id: init
+      - trigger: event
+        event_type: event_template_reloaded
+        id: init
+    sensor:
+      - name: Echo House Settings
+        unique_id: echo_house_settings
+        icon: mdi:home-cog-outline
+        device_class: timestamp
+        state: >-
+          {{ now().isoformat() if trigger.id == 'set' or this.state in ['unknown', 'unavailable', none, ''] else this.state }}
+        attributes:
+          override: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set cur = this.attributes.override if this.attributes.override is defined else 'auto' %}
+            {{ d.override if d.override in ['auto', 'home', 'away'] else cur }}
+          override_until: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set cur = this.attributes.override_until if this.attributes.override_until is defined else 'manual' %}
+            {% if d.override_until in ['arrival', 'departure', 'manual'] %}{{ d.override_until }}
+            {% elif d.override == 'away' %}arrival
+            {% elif d.override in ['auto', 'home'] %}manual
+            {% else %}{{ cur }}{% endif %}
+          override_at: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ now().isoformat() if d.override is defined and d.override is not none else (this.attributes.override_at | default(none)) }}
+          guests: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.guests if d.guests in [true, false] else (this.attributes.guests | default(false)) }}
+          vacation: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.vacation if d.vacation in [true, false] else (this.attributes.vacation | default(false)) }}
+          night: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.night if d.night in [true, false] else (this.attributes.night | default(true)) }}
+          night_start: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.night_start if d.night_start is string and d.night_start | regex_match('^\\d{1,2}:\\d{2}$') else (this.attributes.night_start | default('22:30')) }}
+          night_end: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.night_end if d.night_end is string and d.night_end | regex_match('^\\d{1,2}:\\d{2}$') else (this.attributes.night_end | default('06:30')) }}
+          away_delay: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.away_delay | int if d.away_delay is number else (this.attributes.away_delay | default(10)) }}
+          # Leave empty to use every person.* entity.
+          people: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {{ d.people if d.people is list else (this.attributes.people | default([])) }}
+
+  - binary_sensor:
+      - name: Echo House Occupied
+        unique_id: echo_house_occupied
+        device_class: occupancy
+        state: >-
+          {% set s = 'sensor.echo_house_settings' %}
+          {% set ppl = state_attr(s, 'people') or (states.person | map(attribute='entity_id') | list) %}
+          {{ (ppl | select('is_state', 'home') | list | count) > 0 or state_attr(s, 'guests') == true }}
+        delay_off: "{{ '00:%02d:00' | format(state_attr('sensor.echo_house_settings', 'away_delay') | int(10)) }}"
+        attributes:
+          people_home: >-
+            {% set ppl = state_attr('sensor.echo_house_settings', 'people') or (states.person | map(attribute='entity_id') | list) %}
+            {{ ppl | select('is_state', 'home') | list }}
+
+  - sensor:
+      - name: Echo House Mode
+        unique_id: echo_house_mode
+        icon: >-
+          {{ {'home': 'mdi:home', 'night': 'mdi:home-moon-outline', 'away': 'mdi:home-export-outline', 'vacation': 'mdi:airplane'}.get(this.state, 'mdi:home') }}
+        state: >-
+          {% set s = 'sensor.echo_house_settings' %}
+          {% set ov = state_attr(s, 'override') or 'auto' %}
+          {% set occ = is_state('binary_sensor.echo_house_occupied', 'on') %}
+          {% set home = (ov == 'home') or (ov == 'auto' and occ) %}
+          {% set ns_ = state_attr(s, 'night_start') or '22:30' %}
+          {% set ne_ = state_attr(s, 'night_end') or '06:30' %}
+          {% set t = now().strftime('%H:%M') %}
+          {% set a = '%05s' | format(ns_) | replace(' ', '0') %}
+          {% set b = '%05s' | format(ne_) | replace(' ', '0') %}
+          {% set night = state_attr(s, 'night') != false and ((a <= b and a <= t < b) or (a > b and (t >= a or t < b))) %}
+          {% if state_attr(s, 'vacation') == true %}vacation
+          {% elif not home %}away
+          {% elif night %}night
+          {% else %}home{% endif %}
+        attributes:
+          occupied: "{{ is_state('binary_sensor.echo_house_occupied', 'on') }}"
+          override: "{{ state_attr('sensor.echo_house_settings', 'override') or 'auto' }}"
+          override_until: "{{ state_attr('sensor.echo_house_settings', 'override_until') or 'manual' }}"
+          source: >-
+            {% set s = 'sensor.echo_house_settings' %}
+            {{ 'vacation' if state_attr(s, 'vacation') == true else ('override' if (state_attr(s, 'override') or 'auto') != 'auto' else 'auto') }}
+          reason: >-
+            {% set s = 'sensor.echo_house_settings' %}
+            {% set ov = state_attr(s, 'override') or 'auto' %}
+            {% set ppl = state_attr(s, 'people') or (states.person | map(attribute='entity_id') | list) %}
+            {% set home = ppl | select('is_state', 'home') | map('state_attr', 'friendly_name') | list %}
+            {% if state_attr(s, 'vacation') == true %}Vacation mode is on
+            {% elif ov == 'home' %}Set to Home by hand
+            {% elif ov == 'away' %}Set to Away by hand
+            {% elif home | count %}{{ home | join(' and ') }} {{ 'is' if home | count == 1 else 'are' }} home
+            {% elif state_attr(s, 'guests') == true %}Guests are home
+            {% elif is_state('binary_sensor.echo_house_occupied', 'on') %}Leaving…
+            {% else %}Nobody is home{% endif %}
+          people_home: >-
+            {% set ppl = state_attr('sensor.echo_house_settings', 'people') or (states.person | map(attribute='entity_id') | list) %}
+            {{ ppl | select('is_state', 'home') | list }}
+          people_away: >-
+            {% set ppl = state_attr('sensor.echo_house_settings', 'people') or (states.person | map(attribute='entity_id') | list) %}
+            {{ ppl | reject('is_state', ['home', 'unknown', 'unavailable']) | list }}
+          people_unknown: >-
+            {% set ppl = state_attr('sensor.echo_house_settings', 'people') or (states.person | map(attribute='entity_id') | list) %}
+            {{ ppl | select('is_state', ['unknown', 'unavailable']) | list }}
+          guests: "{{ state_attr('sensor.echo_house_settings', 'guests') == true }}"
+          night_start: "{{ state_attr('sensor.echo_house_settings', 'night_start') or '22:30' }}"
+          night_end: "{{ state_attr('sensor.echo_house_settings', 'night_end') or '06:30' }}"
+
+script:
+  echo_house_set:
+    alias: "Echo house: set mode"
+    description: >-
+      Changes the house-mode settings. Leave out anything you don't want to change.
+      override: auto (follow presence) / home / away. override_until: arrival (Away ends when
+      someone gets home), departure (Home ends when everyone leaves) or manual.
+    icon: mdi:home-cog-outline
+    mode: queued
+    fields:
+      override:
+        name: Override
+        selector:
+          select:
+            options: [auto, home, away]
+      override_until:
+        name: Override lasts until
+        selector:
+          select:
+            options: [arrival, departure, manual]
+      guests:
+        name: Guests are home
+        selector:
+          boolean: {}
+      vacation:
+        name: Vacation
+        selector:
+          boolean: {}
+      night:
+        name: Use night mode
+        selector:
+          boolean: {}
+      night_start:
+        name: Night starts (HH:MM)
+        selector:
+          text: {}
+      night_end:
+        name: Night ends (HH:MM)
+        selector:
+          text: {}
+      away_delay:
+        name: Away after (minutes)
+        selector:
+          number: {min: 0, max: 60, mode: box}
+    sequence:
+      - event: echo_house_set
+        event_data:
+          override: "{{ override | default(none) }}"
+          override_until: "{{ override_until | default(none) }}"
+          guests: "{{ guests | default(none) }}"
+          vacation: "{{ vacation | default(none) }}"
+          night: "{{ night | default(none) }}"
+          night_start: "{{ night_start | default(none) }}"
+          night_end: "{{ night_end | default(none) }}"
+          away_delay: "{{ away_delay | default(none) }}"
+
+automation:
+  - id: echo_house_mode_changed
+    alias: "Echo house: announce mode changes"
+    description: Fires echo_house_mode_changed so anything can follow the house mode.
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.echo_house_mode
+        not_from: [unknown, unavailable]
+        not_to: [unknown, unavailable]
+    actions:
+      - event: echo_house_mode_changed
+        event_data:
+          from: "{{ trigger.from_state.state }}"
+          to: "{{ trigger.to_state.state }}"
+          reason: "{{ trigger.to_state.attributes.reason | default('') }}"
+
+  # An override that should end by itself: "Away until someone gets home" and
+  # "Home until everyone leaves".
+  - id: echo_house_override_expiry
+    alias: "Echo house: end overrides on arrival / departure"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.echo_house_occupied
+        from: "off"
+        to: "on"
+        id: arrival
+      - trigger: state
+        entity_id: binary_sensor.echo_house_occupied
+        from: "on"
+        to: "off"
+        id: departure
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ state_attr('sensor.echo_house_settings', 'override') not in ['auto', none]
+             and state_attr('sensor.echo_house_settings', 'override_until') == trigger.id }}
+    actions:
+      - action: script.echo_house_set
+        data:
+          override: auto

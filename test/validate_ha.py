@@ -112,6 +112,34 @@ for f in yaml_files:
     walk(data, str(f.relative_to(ROOT)))
 
 check_template((HA / "custom_templates" / "echo_timers.jinja").read_text(), "echo_timers.jinja")
+check_template((HA / "custom_templates" / "echo_climate.jinja").read_text(), "echo_climate.jinja")
+
+
+# A `variables:` block must not use another key of the same block: Home Assistant saves UI
+# scripts and automations with their keys sorted, so the order in the file is not kept.
+# Keys must also be strings (YAML reads a bare `off:` / `on:` / `yes:` as a boolean).
+def check_vars(obj, where):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if not isinstance(k, str):
+                failures.append(f"{where}: key {k!r} is not a string (quote it)")
+            if k == "variables" and isinstance(v, dict):
+                names = set(v)
+                for name, val in v.items():
+                    used = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r"\.\w+|'[^']*'", "", json.dumps(val)))) & (names - {name})
+                    if used:
+                        failures.append(f"{where}.variables.{name} uses {sorted(used)} from the same block")
+            check_vars(v, f"{where}.{k}")
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            check_vars(v, f"{where}[{i}]")
+
+
+for f in sorted((HA / "packages").glob("*.yaml")):
+    try:
+        check_vars(yaml.load(f.read_text(), Loader=Loader), str(f.relative_to(ROOT)))
+    except yaml.YAMLError:
+        pass
 
 
 # ---------- macro behaviour ----------

@@ -1,0 +1,730 @@
+# Echo Show Dashboard: climate (schedule, holds, comfort profiles, smart recovery)
+# https://github.com/partytimeexcellent/echo-show-dashboard
+#
+# Turns one thermostat into a "smart" one, run by Home Assistant:
+#   - Comfort profiles (Home, Wake, Sleep, Away, Vacation), each with a heat and a cool
+#     setpoint and the room sensors it cares about.
+#   - A weekly schedule: each day is a list of "at HH:MM switch to <profile>".
+#   - Holds like a real thermostat: until the next schedule change (the default), for N
+#     hours, or permanent, plus Resume. Changing the setpoint anywhere else (the wall unit,
+#     the HA app, Assist) automatically becomes a hold until the next change, so nothing is
+#     silently undone.
+#   - Away / Vacation from the house mode (packages/echo_house.yaml).
+#   - Room compensation: a profile can follow other rooms' sensors (Sleep follows the
+#     bedroom); the thermostat setpoint is shifted so that room hits the target.
+#   - Smart recovery: starts heating/cooling early so the next period is comfortable on
+#     time, using heat-up and cool-down rates it learns from your house.
+#   - Filter reminder from real run time, and voice commands.
+#
+# Needs: packages/echo_house.yaml and custom_templates/echo_climate.jinja.
+#
+# Install:
+#   1. Copy this file to <config>/packages/echo_climate.yaml and echo_climate.jinja to
+#      <config>/custom_templates/.
+#   2. Replace every climate.thermostat with your thermostat (search and replace), and set
+#      your room sensors under `rooms:` below.            # <-- yours
+#   3. Restart Home Assistant.
+#   4. Turn OFF the thermostat's own schedule and adaptive recovery, or it will fight Home
+#      Assistant (on a Honeywell T6 Pro Z-Wave: Schedule Type = "No schedule" and
+#      Adaptive Intelligent Recovery = off, in the device's Z-Wave configuration).
+#
+# Entities:
+#   sensor.echo_climate_settings  everything you set (profiles, week, hold, options, learned
+#                                 rates, filter). Change it only with script.echo_climate_set
+#                                 / script.echo_climate_hold.
+#   sensor.echo_climate_plan      what the thermostat should be doing now and why (state:
+#                                 schedule / preheat / hold / away / vacation / off), with the
+#                                 whole plan in the `plan` attribute.
+#   binary_sensor.echo_climate_running   heating or cooling right now.
+#
+# If Home Assistant is down, the thermostat simply keeps its last setpoints.
+
+template:
+  - triggers:
+      - trigger: event
+        event_type: echo_climate_set
+        id: set
+      - trigger: homeassistant
+        event: start
+        id: init
+      - trigger: event
+        event_type: event_template_reloaded
+        id: init
+    sensor:
+      - name: Echo Climate Settings
+        unique_id: echo_climate_settings
+        icon: mdi:thermostat-cog
+        device_class: timestamp
+        state: >-
+          {{ now().isoformat() if trigger.id == 'set' or this.state in ['unknown', 'unavailable', none, ''] else this.state }}
+        attributes:
+          # The thermostat and the rooms profiles can follow. "thermostat" is the
+          # thermostat's own reading.                                      # <-- yours
+          rooms: >-
+            {{ [
+              {'key': 'thermostat', 'name': 'Thermostat', 'entity': 'climate.thermostat'},
+              {'key': 'bedroom', 'name': 'Bedroom', 'entity': 'sensor.bedroom_temperature',
+               'humidity': 'sensor.bedroom_humidity', 'battery': 'sensor.bedroom_climate_battery'},
+              {'key': 'downstairs', 'name': 'Downstairs', 'entity': 'sensor.downstairs_temperature',
+               'humidity': 'sensor.downstairs_humidity', 'battery': 'sensor.downstairs_climate_battery'},
+            ] }}
+          profiles: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set F = (state_attr('climate.thermostat', 'max_temp') | float(100)) > 45 %}
+            {% set def = {
+              'home':     {'name': 'Home',     'low': 68 if F else 20,   'high': 76 if F else 24.5, 'sensors': ['thermostat']},
+              'wake':     {'name': 'Wake',     'low': 69 if F else 20.5, 'high': 75 if F else 24,   'sensors': ['thermostat']},
+              'sleep':    {'name': 'Sleep',    'low': 64 if F else 18,   'high': 74 if F else 23,   'sensors': ['bedroom']},
+              'away':     {'name': 'Away',     'low': 62 if F else 16.5, 'high': 80 if F else 27,   'sensors': ['thermostat']},
+              'vacation': {'name': 'Vacation', 'low': 55 if F else 13,   'high': 85 if F else 29.5, 'sensors': ['thermostat']},
+            } %}
+            {% set cur = this.attributes.profiles if this.attributes.profiles is mapping else def %}
+            {{ dict(cur, **d.profiles) if d.profiles is mapping else cur }}
+          week: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set wd = [{'t': '06:30', 'p': 'wake'}, {'t': '08:30', 'p': 'home'}, {'t': '22:30', 'p': 'sleep'}] %}
+            {% set we = [{'t': '07:30', 'p': 'wake'}, {'t': '09:30', 'p': 'home'}, {'t': '23:00', 'p': 'sleep'}] %}
+            {% set def = {'mon': wd, 'tue': wd, 'wed': wd, 'thu': wd, 'fri': wd, 'sat': we, 'sun': we} %}
+            {% set cur = this.attributes.week if this.attributes.week is mapping else def %}
+            {{ dict(cur, **d.week) if d.week is mapping else cur }}
+          hold: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set cur = this.attributes.hold if this.attributes.hold is mapping else {'type': 'none'} %}
+            {{ d.hold if d.hold is mapping else cur }}
+          applied: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set cur = this.attributes.applied if this.attributes.applied is mapping else {} %}
+            {{ d.applied if d.applied is mapping else cur }}
+          options: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set F = (state_attr('climate.thermostat', 'max_temp') | float(100)) > 45 %}
+            {% set def = {'preheat': true, 'compensate': true, 'away': true, 'default_hold': 'next',
+                          'max_lead': 120, 'max_offset': 4 if F else 2, 'differential': 3 if F else 1.5,
+                          'step': 1 if F else 0.5} %}
+            {% set cur = dict(def, **this.attributes.options) if this.attributes.options is mapping else def %}
+            {{ dict(cur, **d.options) if d.options is mapping else cur }}
+          learn: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set F = (state_attr('climate.thermostat', 'max_temp') | float(100)) > 45 %}
+            {% set def = {'heat_rate': 4 if F else 2, 'cool_rate': 3 if F else 1.5, 'heat_n': 0, 'cool_n': 0, 'run': none} %}
+            {% set cur = this.attributes.learn if this.attributes.learn is mapping else def %}
+            {{ dict(cur, **d.learn) if d.learn is mapping else cur }}
+          filter: >-
+            {% set d = trigger.event.data if trigger.id == 'set' else {} %}
+            {% set def = {'hours': 0, 'limit': 300, 'changed': now().date().isoformat(), 'notified': false} %}
+            {% set cur = this.attributes.filter if this.attributes.filter is mapping else def %}
+            {{ dict(cur, **d.filter) if d.filter is mapping else cur }}
+
+  - sensor:
+      - name: Echo Climate Plan
+        unique_id: echo_climate_plan
+        icon: >-
+          {{ {'schedule': 'mdi:calendar-clock', 'preheat': 'mdi:clock-fast', 'hold': 'mdi:hand-back-left-outline',
+              'away': 'mdi:home-export-outline', 'vacation': 'mdi:airplane', 'off': 'mdi:power'}.get(this.state, 'mdi:thermostat') }}
+        state: >-
+          {% from 'echo_climate.jinja' import echo_climate_plan %}
+          {{ (echo_climate_plan('climate.thermostat') | from_json).source }}
+        attributes:
+          plan: >-
+            {% from 'echo_climate.jinja' import echo_climate_plan %}
+            {{ echo_climate_plan('climate.thermostat') | from_json }}
+
+  - binary_sensor:
+      - name: Echo Climate Running
+        unique_id: echo_climate_running
+        device_class: running
+        state: "{{ state_attr('climate.thermostat', 'hvac_action') in ['heating', 'cooling'] }}"
+        attributes:
+          action: "{{ state_attr('climate.thermostat', 'hvac_action') }}"
+
+script:
+  echo_climate_set:
+    alias: "Echo climate: save settings"
+    description: >-
+      Saves climate settings. data is a mapping with any of: profiles (by key, each
+      {name, low, high, sensors}), week (by day, each a list of {t: "HH:MM", p: profile}),
+      options, filter, learn. Keys you leave out are kept.
+    icon: mdi:content-save-cog-outline
+    mode: queued
+    fields:
+      data:
+        name: Settings
+        required: true
+        selector:
+          object: {}
+    sequence:
+      - event: echo_climate_set
+        event_data:
+          profiles: "{{ data.profiles | default(none) }}"
+          week: "{{ data.week | default(none) }}"
+          options: "{{ data.options | default(none) }}"
+          filter: "{{ data.filter | default(none) }}"
+          learn: "{{ data.learn | default(none) }}"
+
+  echo_climate_hold:
+    alias: "Echo climate: hold / resume"
+    description: >-
+      Holds the thermostat at a temperature, or resumes the schedule.
+      resume: true goes back to the schedule. until: next (the next schedule change), hours,
+      permanent, or default (the hold length set in the options). Temperatures: low and/or
+      high (absolute setpoints), or delta (+/- from now; side = heat, cool or both), or
+      profile (that profile's temperatures). Nothing given = hold what it's set to now.
+    icon: mdi:hand-back-left-outline
+    mode: queued
+    fields:
+      resume:
+        name: Resume the schedule
+        description: Ends the hold instead of setting one.
+        default: false
+        selector:
+          boolean: {}
+      until:
+        name: Until
+        description: next = the next schedule change; default = the hold length set on the Climate page.
+        default: default
+        selector:
+          select:
+            options: [default, next, hours, permanent]
+      hours:
+        name: Hours
+        selector:
+          number: {min: 0.5, max: 72, step: 0.5, mode: box}
+      low:
+        name: Heat setpoint
+        selector:
+          number: {min: 0, max: 120, step: 0.5, mode: box}
+      high:
+        name: Cool setpoint
+        selector:
+          number: {min: 0, max: 120, step: 0.5, mode: box}
+      delta:
+        name: Change by
+        selector:
+          number: {min: -20, max: 20, step: 0.5, mode: box}
+      side:
+        name: Which setpoint to change
+        default: both
+        selector:
+          select:
+            options: [heat, cool, both]
+      profile:
+        name: Profile
+        selector:
+          text: {}
+      by:
+        name: Who asked
+        default: dashboard
+        selector:
+          text: {}
+      apply:
+        name: Send to the thermostat
+        default: true
+        selector:
+          boolean: {}
+    sequence:
+      # (each variables step only uses names from the steps before it: Home Assistant
+      # saves scripts with their keys sorted)
+      - variables:
+          hv: "{{ states('climate.thermostat') }}"
+          plan: "{{ state_attr('sensor.echo_climate_plan', 'plan') or {} }}"
+          opts: "{{ state_attr('sensor.echo_climate_settings', 'options') or {} }}"
+          profs: "{{ state_attr('sensor.echo_climate_settings', 'profiles') or {} }}"
+          lo_lim: "{{ state_attr('climate.thermostat', 'min_temp') | float(40) }}"
+          hi_lim: "{{ state_attr('climate.thermostat', 'max_temp') | float(90) }}"
+      - if:
+          - condition: template
+            value_template: "{{ resume | default(false) }}"
+        then:
+          - event: echo_climate_set
+            event_data:
+              hold:
+                type: none
+                by: "{{ by | default('dashboard') }}"
+                at: "{{ now().isoformat() }}"
+          - stop: Resumed
+      - variables:
+          diff: "{{ opts.differential | default(3) | float(3) }}"
+          stepv: "{{ opts.step | default(1) | float(1) }}"
+          cur_low: >-
+            {{ state_attr('climate.thermostat', 'target_temp_low') if hv == 'heat_cool' else (state_attr('climate.thermostat', 'temperature') if hv == 'heat' else (plan.set_low | default(state_attr('climate.thermostat', 'target_temp_low')))) }}
+          cur_high: >-
+            {{ state_attr('climate.thermostat', 'target_temp_high') if hv == 'heat_cool' else (state_attr('climate.thermostat', 'temperature') if hv == 'cool' else (plan.set_high | default(state_attr('climate.thermostat', 'target_temp_high')))) }}
+          # default_hold option: next | permanent | 1h / 2h / 4h ...
+          dh: "{{ opts.default_hold | default('next') | string }}"
+          ofs: "{{ plan.offset | default(0) | float(0) }}"
+      - variables:
+          kind: >-
+            {% set u = until | default('default') %}
+            {{ u if u in ['next', 'hours', 'permanent'] else ('hours' if dh.endswith('h') else (dh if dh in ['next', 'permanent'] else 'next')) }}
+          hrs: >-
+            {{ hours | float(2) if hours is defined and hours is not none else (dh[:-1] | float(2) if dh.endswith('h') else 2) }}
+          new_low: >-
+            {% set v = none %}
+            {% if profile is defined and profile in profs %}{% set v = profs[profile].low | float + ofs %}
+            {% elif low is defined and low is not none %}{% set v = low | float %}
+            {% elif delta is defined and (side | default('both')) in ['heat', 'both'] %}{% set v = cur_low | float(0) + delta | float(0) %}
+            {% else %}{% set v = cur_low | float(none) %}{% endif %}
+            {{ none if v is none else [[((v / stepv) | round(0)) * stepv, lo_lim] | max, hi_lim] | min }}
+          new_high: >-
+            {% set v = none %}
+            {% if profile is defined and profile in profs %}{% set v = profs[profile].high | float + ofs %}
+            {% elif high is defined and high is not none %}{% set v = high | float %}
+            {% elif delta is defined and (side | default('both')) in ['cool', 'both'] %}{% set v = cur_high | float(0) + delta | float(0) %}
+            {% else %}{% set v = cur_high | float(none) %}{% endif %}
+            {{ none if v is none else [[((v / stepv) | round(0)) * stepv, lo_lim] | max, hi_lim] | min }}
+      - variables:
+          # keep heat below cool by the thermostat's auto differential
+          fix_low: >-
+            {% if new_low is number and new_high is number and new_high - new_low < diff and (high is defined or (delta is defined and side | default('both') == 'cool')) %}{{ new_high - diff }}{% else %}{{ new_low }}{% endif %}
+          fix_high: >-
+            {% if new_low is number and new_high is number and new_high - new_low < diff and not (high is defined or (delta is defined and side | default('both') == 'cool')) %}{{ new_low + diff }}{% else %}{{ new_high }}{% endif %}
+          ends: >-
+            {% if kind == 'permanent' %}{{ none }}
+            {% elif kind == 'hours' %}{{ (now() + timedelta(minutes=hrs | float(2) * 60)).isoformat() }}
+            {% else %}{{ plan.next.start if plan.next is defined and plan.next.start else (now() + timedelta(hours=4)).isoformat() }}{% endif %}
+      - event: echo_climate_set
+        event_data:
+          hold:
+            type: "{{ 'until' if kind == 'hours' else kind }}"
+            until: "{{ ends }}"
+            low: "{{ fix_low }}"
+            high: "{{ fix_high }}"
+            profile: "{{ profile if profile is defined and profile in profs else none }}"
+            by: "{{ by | default('dashboard') }}"
+            at: "{{ now().isoformat() }}"
+      - if:
+          - condition: template
+            value_template: "{{ (apply | default(true)) and hv in ['heat', 'cool', 'heat_cool'] }}"
+        then:
+          - choose:
+              - conditions: "{{ hv == 'heat_cool' }}"
+                sequence:
+                  - action: climate.set_temperature
+                    target:
+                      entity_id: climate.thermostat
+                    data:
+                      target_temp_low: "{{ fix_low }}"
+                      target_temp_high: "{{ fix_high }}"
+              - conditions: "{{ hv == 'heat' }}"
+                sequence:
+                  - action: climate.set_temperature
+                    target:
+                      entity_id: climate.thermostat
+                    data:
+                      temperature: "{{ fix_low }}"
+              - conditions: "{{ hv == 'cool' }}"
+                sequence:
+                  - action: climate.set_temperature
+                    target:
+                      entity_id: climate.thermostat
+                    data:
+                      temperature: "{{ fix_high }}"
+          - event: echo_climate_set
+            event_data:
+              applied:
+                low: "{{ fix_low }}"
+                high: "{{ fix_high }}"
+                want_low: null
+                want_high: null
+                mode: "{{ hv }}"
+                at: "{{ now().isoformat() }}"
+
+automation:
+  # Sends the plan's setpoints to the thermostat when they change (schedule, profile,
+  # away, room compensation, smart recovery). Room-compensation-only changes are sent at
+  # most every 15 minutes to spare the thermostat's batteries and the Z-Wave network.
+  - id: echo_climate_apply
+    alias: "Echo climate: follow the plan"
+    mode: queued
+    max: 3
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: sensor.echo_climate_plan
+        attribute: plan
+      - trigger: state
+        entity_id: climate.thermostat
+        not_from: [unavailable, unknown]
+      - trigger: time_pattern
+        minutes: "/10"
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set p = state_attr('sensor.echo_climate_plan', 'plan') %}
+          {{ p is mapping and p.control and p.set_low is number and p.set_high is number
+             and states('climate.thermostat') in ['heat', 'cool', 'heat_cool'] }}
+    actions:
+      - variables:
+          p: "{{ state_attr('sensor.echo_climate_plan', 'plan') }}"
+          hv: "{{ states('climate.thermostat') }}"
+          a: "{{ state_attr('sensor.echo_climate_settings', 'applied') or {} }}"
+      - variables:
+          cur_low: "{{ state_attr('climate.thermostat', 'target_temp_low' if hv == 'heat_cool' else 'temperature') | float(-99) }}"
+          cur_high: "{{ state_attr('climate.thermostat', 'target_temp_high' if hv == 'heat_cool' else 'temperature') | float(-99) }}"
+      - variables:
+          need: >-
+            {% if hv == 'heat_cool' %}{{ cur_low != p.set_low or cur_high != p.set_high }}
+            {% elif hv == 'heat' %}{{ cur_low != p.set_low }}
+            {% else %}{{ cur_high != p.set_high }}{% endif %}
+          # only the room compensation moved (same profile temperatures as last time)
+          drift_only: >-
+            {{ a.want_low is defined and a.want_low == p.want_low and a.want_high == p.want_high
+               and a.mode == hv and a.at is defined
+               and (now() - as_datetime(a.at)).total_seconds() < 900 }}
+      - choose:
+          # remember first, so the hold detector knows this change is ours
+          - conditions: "{{ need and not drift_only }}"
+            sequence:
+              - event: echo_climate_set
+                event_data:
+                  applied:
+                    low: "{{ p.set_low }}"
+                    high: "{{ p.set_high }}"
+                    want_low: "{{ p.want_low }}"
+                    want_high: "{{ p.want_high }}"
+                    mode: "{{ hv }}"
+                    source: "{{ p.source }}"
+                    at: "{{ now().isoformat() }}"
+              - choose:
+                  - conditions: "{{ hv == 'heat_cool' }}"
+                    sequence:
+                      - action: climate.set_temperature
+                        target:
+                          entity_id: climate.thermostat
+                        data:
+                          target_temp_low: "{{ p.set_low }}"
+                          target_temp_high: "{{ p.set_high }}"
+                  - conditions: "{{ hv == 'heat' }}"
+                    sequence:
+                      - action: climate.set_temperature
+                        target:
+                          entity_id: climate.thermostat
+                        data:
+                          temperature: "{{ p.set_low }}"
+                default:
+                  - action: climate.set_temperature
+                    target:
+                      entity_id: climate.thermostat
+                    data:
+                      temperature: "{{ p.set_high }}"
+          # already right (e.g. just installed): just note it, so later hand changes are noticed
+          - conditions: "{{ not need and (a.low is not defined or a.low != p.set_low or a.high != p.set_high or a.mode != hv) }}"
+            sequence:
+              - event: echo_climate_set
+                event_data:
+                  applied:
+                    low: "{{ p.set_low }}"
+                    high: "{{ p.set_high }}"
+                    want_low: "{{ p.want_low }}"
+                    want_high: "{{ p.want_high }}"
+                    mode: "{{ hv }}"
+                    source: "{{ p.source }}"
+                    at: "{{ (now() - timedelta(minutes=2)).isoformat() }}"
+
+  # Someone changed the setpoint somewhere else (the wall, the HA app, Assist): keep it,
+  # as a hold until the next schedule change (or whatever the default hold is).
+  - id: echo_climate_manual_hold
+    alias: "Echo climate: a manual change becomes a hold"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: climate.thermostat
+        attribute: target_temp_low
+        for: "00:00:20"
+      - trigger: state
+        entity_id: climate.thermostat
+        attribute: target_temp_high
+        for: "00:00:20"
+      - trigger: state
+        entity_id: climate.thermostat
+        attribute: temperature
+        for: "00:00:20"
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set p = state_attr('sensor.echo_climate_plan', 'plan') %}
+          {% set a = state_attr('sensor.echo_climate_settings', 'applied') %}
+          {% set c = states.climate.thermostat %}
+          {% set hv = c.state if c else 'off' %}
+          {% if not (p is mapping and p.control and a is mapping and a.at is defined) or hv not in ['heat', 'cool', 'heat_cool'] %}false
+          {% elif (now() - as_datetime(a.at)).total_seconds() < 60 or (now() - c.last_changed).total_seconds() < 60 %}false
+          {% else %}
+            {% set lo = c.attributes.target_temp_low if hv == 'heat_cool' else c.attributes.temperature %}
+            {% set hi = c.attributes.target_temp_high if hv == 'heat_cool' else c.attributes.temperature %}
+            {% if hv == 'heat_cool' %}{{ (lo | float(0) - a.low | float(0)) | abs >= 0.5 or (hi | float(0) - a.high | float(0)) | abs >= 0.5 }}
+            {% elif hv == 'heat' %}{{ (lo | float(0) - a.low | float(0)) | abs >= 0.5 }}
+            {% else %}{{ (hi | float(0) - a.high | float(0)) | abs >= 0.5 }}{% endif %}
+          {% endif %}
+    actions:
+      - variables:
+          hv: "{{ states('climate.thermostat') }}"
+      - action: script.echo_climate_hold
+        data:
+          until: default
+          low: "{{ state_attr('climate.thermostat', 'target_temp_low') if hv == 'heat_cool' else state_attr('climate.thermostat', 'temperature') }}"
+          high: "{{ state_attr('climate.thermostat', 'target_temp_high') if hv == 'heat_cool' else state_attr('climate.thermostat', 'temperature') }}"
+          by: thermostat
+          apply: false
+
+  # Leaving the house ends temporary holds (a permanent hold stays), and a hold whose time
+  # is up is cleared so the plan shows "Following schedule" again.
+  - id: echo_climate_hold_cleanup
+    alias: "Echo climate: end holds"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.echo_house_mode
+        to: [away, vacation]
+        id: away
+      - trigger: state
+        entity_id: sensor.echo_climate_plan
+        from: hold
+        id: expired
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (state_attr('sensor.echo_climate_settings', 'hold') or {}).type in ['next', 'until'] }}
+      - condition: template
+        value_template: >-
+          {{ trigger.id == 'away' or not (state_attr('sensor.echo_climate_plan', 'plan') or {}).get('hold', {}).get('active', false) }}
+    actions:
+      - event: echo_climate_set
+        event_data:
+          hold:
+            type: none
+            by: "{{ 'away' if trigger.id == 'away' else 'expired' }}"
+            at: "{{ now().isoformat() }}"
+
+  # Smart recovery learns how fast the house warms up and cools down: it times every
+  # heating/cooling run that starts at least 2 degrees from the setpoint.
+  - id: echo_climate_learn
+    alias: "Echo climate: learn recovery rates"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.echo_climate_running
+        from: "off"
+        to: "on"
+        id: start
+      - trigger: state
+        entity_id: binary_sensor.echo_climate_running
+        from: "on"
+        to: "off"
+        id: stop
+    actions:
+      - variables:
+          c: climate.thermostat
+          hv: "{{ states('climate.thermostat') }}"
+          act: "{{ state_attr('climate.thermostat', 'hvac_action') }}"
+          temp: "{{ state_attr('climate.thermostat', 'current_temperature') | float(none) }}"
+          L: "{{ state_attr('sensor.echo_climate_settings', 'learn') or {} }}"
+      - choose:
+          - conditions: "{{ trigger.id == 'start' and temp is number }}"
+            sequence:
+              - variables:
+                  kind: "{{ 'heat' if act == 'heating' else 'cool' }}"
+              - variables:
+                  target: >-
+                    {% if kind == 'heat' %}{{ state_attr(c, 'target_temp_low') if hv == 'heat_cool' else state_attr(c, 'temperature') }}
+                    {% else %}{{ state_attr(c, 'target_temp_high') if hv == 'heat_cool' else state_attr(c, 'temperature') }}{% endif %}
+              - event: echo_climate_set
+                event_data:
+                  learn:
+                    run: >-
+                      {% set gap = (target | float(temp) - temp) if kind == 'heat' else (temp - target | float(temp)) %}
+                      {{ {'kind': kind, 't0': now().isoformat(), 'temp0': temp, 'target': target | float(temp)} if gap >= 2 else none }}
+          - conditions: "{{ trigger.id == 'stop' and L.run is mapping and temp is number }}"
+            sequence:
+              - variables:
+                  hrs: "{{ ((now() - as_datetime(L.run.t0)).total_seconds() / 3600) | round(3) }}"
+                  moved: "{{ (temp - L.run.temp0) if L.run.kind == 'heat' else (L.run.temp0 - temp) }}"
+                  key: "{{ L.run.kind ~ '_rate' }}"
+                  nkey: "{{ L.run.kind ~ '_n' }}"
+              - event: echo_climate_set
+                event_data:
+                  learn: >-
+                    {% set out = {'run': none} %}
+                    {% if hrs >= 0.17 and moved >= 1 %}
+                      {% set rate = moved / hrs %}
+                      {% set old = L[key] | float(rate) %}
+                      {% set n = L[nkey] | int(0) %}
+                      {% set w = 0.5 if n < 3 else 0.25 %}
+                      {% set new = ([[old * (1 - w) + rate * w, 0.5] | max, 15] | min) | round(2) %}
+                      {% set out = {'run': none, key: new, nkey: n + 1} %}
+                    {% endif %}
+                    {{ out }}
+
+  # Filter reminder: adds up heating and cooling run time.
+  - id: echo_climate_filter
+    alias: "Echo climate: filter run time"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.echo_climate_running
+        from: "on"
+        to: "off"
+    actions:
+      - variables:
+          f: "{{ state_attr('sensor.echo_climate_settings', 'filter') or {} }}"
+      - variables:
+          hours: >-
+            {{ (f.hours | default(0) | float(0) + (now() - trigger.from_state.last_changed).total_seconds() / 3600) | round(2) }}
+      - variables:
+          due: "{{ hours >= f.limit | default(300) | float(300) }}"
+      - event: echo_climate_set
+        event_data:
+          filter:
+            hours: "{{ hours }}"
+            notified: "{{ due }}"
+      - if:
+          - condition: template
+            value_template: "{{ due and not f.notified | default(false) }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: echo_climate_filter
+              title: Time to change the furnace filter
+              message: >-
+                The heating and cooling have run {{ hours | round(0) | int }} hours since the
+                filter was last changed{{ ' on ' ~ as_datetime(f.changed).strftime('%B %-d') if f.changed else '' }}.
+                Mark it done on the Climate page.
+
+  # Voice. Each sentence is answered by the voice assistant that heard it.
+  - id: echo_climate_voice
+    alias: "Echo climate: voice commands"
+    mode: queued
+    triggers:
+      - trigger: conversation
+        command:
+          - "make it (warmer|hotter) [by {n} [degree|degrees]]"
+          - "make it (a little|a bit|slightly) (warmer|hotter)"
+          - "(turn|bump|crank) up the (heat|thermostat|temperature) [by {n} [degree|degrees]]"
+          - "(I'm|I am|it's|it is) (cold|freezing|chilly) [in here]"
+        id: warmer
+      - trigger: conversation
+        command:
+          - "make it (cooler|colder) [by {n} [degree|degrees]]"
+          - "make it (a little|a bit|slightly) (cooler|colder)"
+          - "(turn|bump) down the (heat|thermostat|temperature) [by {n} [degree|degrees]]"
+          - "(I'm|I am|it's|it is) (hot|warm|too warm|boiling) [in here]"
+        id: cooler
+      - trigger: conversation
+        command:
+          - "(set|hold) [the] (thermostat|temperature|heat) [at|to] {t} [degree|degrees] for {h} [hour|hours]"
+          - "hold [the] (thermostat|temperature|heat) for {h} [hour|hours]"
+        id: hours
+      - trigger: conversation
+        command:
+          - "hold [the] (thermostat|temperature|heat) [at {t} [degree|degrees]] (permanently|forever|until I say)"
+        id: permanent
+      - trigger: conversation
+        command:
+          - "(resume|go back to|follow) [the] [thermostat|heating|climate] schedule"
+          - "cancel [the] [thermostat|temperature|heat] hold"
+        id: resume
+      - trigger: conversation
+        command:
+          - "what's the thermostat (doing|set to|at)"
+          - "what is the thermostat (doing|set to|at)"
+          - "is the (heat|heating|furnace|ac|air conditioning|air) on"
+        id: status
+      - trigger: conversation
+        command:
+          - "(I'm|we're|I am|we are) leaving"
+          - "set [the] (house|home) [mode] to away"
+          - "(house|home) mode away"
+        id: away
+      - trigger: conversation
+        command:
+          - "set [the] (house|home) [mode] to home"
+          - "(house|home) mode home"
+          - "(I'm|we're|I am|we are) (home|back)"
+        id: home
+      - trigger: conversation
+        command:
+          - "set [the] (house|home) [mode] to (auto|automatic)"
+          - "(house|home) mode (auto|automatic)"
+        id: auto
+      - trigger: conversation
+        command:
+          - "(start|turn on) vacation mode"
+        id: vacation_on
+      - trigger: conversation
+        command:
+          - "(end|stop|turn off) vacation mode"
+        id: vacation_off
+    actions:
+      - variables:
+          words: {'a': 1, 'an': 1, 'one': 1, 'two': 2, 'a couple': 2, 'couple': 2, 'three': 3, 'a few': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'half an': 0.5, 'half': 0.5}
+          slot_n: "{{ (trigger.slots.n | default('') | string | lower | trim) if trigger.slots is defined else '' }}"
+          slot_t: "{{ (trigger.slots.t | default('') | string | lower | trim) if trigger.slots is defined else '' }}"
+          slot_h: "{{ (trigger.slots.h | default('') | string | lower | trim) if trigger.slots is defined else '' }}"
+          hv: "{{ states('climate.thermostat') }}"
+      - variables:
+          n: "{{ words[slot_n] if slot_n in words else (slot_n | regex_replace('[^0-9.]', '') | float(2)) }}"
+          t: "{{ words[slot_t] if slot_t in words else (slot_t | regex_replace('[^0-9.]', '') | float(none)) }}"
+          h: "{{ words[slot_h] if slot_h in words else (slot_h | regex_replace('[^0-9.]', '') | float(2)) }}"
+          side: "{{ 'cool' if hv == 'cool' else ('heat' if hv == 'heat' else ('cool' if state_attr('climate.thermostat', 'hvac_action') == 'cooling' else 'heat')) }}"
+      - choose:
+          - conditions: "{{ trigger.id in ['warmer', 'cooler'] }}"
+            sequence:
+              - action: script.echo_climate_hold
+                data:
+                  delta: "{{ n if trigger.id == 'warmer' else -n }}"
+                  side: "{{ 'both' if hv == 'heat_cool' else side }}"
+                  by: voice
+              - set_conversation_response: >-
+                  {% set p = state_attr('sensor.echo_climate_plan', 'plan') or {} %}
+                  OK, {{ n | round(0) | int }} degree{{ '' if n == 1 else 's' }} {{ 'warmer' if trigger.id == 'warmer' else 'cooler' }}{{ ' until the next schedule change' if (p.next | default({})).start else '' }}.
+          - conditions: "{{ trigger.id in ['hours', 'permanent'] }}"
+            sequence:
+              - action: script.echo_climate_hold
+                data: >-
+                  {% set d = {'until': 'hours' if trigger.id == 'hours' else 'permanent', 'hours': h, 'by': 'voice'} %}
+                  {% if t is number and hv == 'cool' %}{% set d = dict(d, high=t) %}
+                  {% elif t is number %}{% set d = dict(d, low=t) %}{% endif %}
+                  {{ d }}
+              - set_conversation_response: >-
+                  {% if trigger.id == 'hours' %}Holding{{ ' at ' ~ (t | int) if t is number else '' }} for {{ h | round(1) | string | replace('.0', '') }} hour{{ '' if h == 1 else 's' }}.
+                  {% else %}Holding{{ ' at ' ~ (t | int) if t is number else '' }} until you resume the schedule.{% endif %}
+          - conditions: "{{ trigger.id == 'resume' }}"
+            sequence:
+              - action: script.echo_climate_hold
+                data:
+                  resume: true
+                  by: voice
+              - set_conversation_response: OK, back on the schedule.
+          - conditions: "{{ trigger.id == 'status' }}"
+            sequence:
+              - set_conversation_response: >-
+                  {%- set p = state_attr('sensor.echo_climate_plan', 'plan') or {} -%}
+                  {%- set c = 'climate.thermostat' -%}
+                  {%- set act = state_attr(c, 'hvac_action') -%}
+                  {%- set hv = states(c) -%}
+                  {%- if hv == 'off' -%}The thermostat is off.
+                  {%- else -%}
+                  It's {{ state_attr(c, 'current_temperature') | int }} degrees{{ ' and the heat is on' if act == 'heating' else (' and the air conditioning is on' if act == 'cooling' else '') }}.
+                  {%- if hv == 'heat_cool' %} It keeps it between {{ state_attr(c, 'target_temp_low') | int }} and {{ state_attr(c, 'target_temp_high') | int }}
+                  {%- else %} It's set to {{ state_attr(c, 'temperature') | int }}{% endif -%}
+                  {%- if p.source == 'hold' %}, on hold{% if (p.hold | default({})).until %} until {{ as_datetime(p.hold.until).strftime('%-I:%M %p') }}{% endif %}.
+                  {%- elif p.source in ['away', 'vacation'] %}, because the house is set to {{ p.source }}.
+                  {%- elif (p.next | default({})).start %}, following the schedule. {{ p.next.name }} starts at {{ as_datetime(p.next.start).strftime('%-I:%M %p') }}.
+                  {%- else %}.{% endif -%}
+                  {%- endif -%}
+          - conditions: "{{ trigger.id in ['away', 'home', 'auto'] }}"
+            sequence:
+              - action: script.echo_house_set
+                data:
+                  override: "{{ trigger.id }}"
+                  override_until: "{{ 'arrival' if trigger.id == 'away' else ('departure' if trigger.id == 'home' else 'manual') }}"
+              - set_conversation_response: >-
+                  {% if trigger.id == 'away' %}OK, the house is set to away until someone gets home.
+                  {% elif trigger.id == 'home' %}OK, the house is set to home until everyone leaves.
+                  {% else %}OK, the house follows who's home again.{% endif %}
+          - conditions: "{{ trigger.id in ['vacation_on', 'vacation_off'] }}"
+            sequence:
+              - action: script.echo_house_set
+                data:
+                  vacation: "{{ trigger.id == 'vacation_on' }}"
+              - set_conversation_response: >-
+                  {{ 'Vacation mode is on. Have a good trip.' if trigger.id == 'vacation_on' else 'Vacation mode is off. Welcome back.' }}

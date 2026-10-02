@@ -1,12 +1,13 @@
 # Echo Show Dashboard
 
-Full-screen Home Assistant dashboard cards for an **Echo Show 8** (or any 1280×800 wall tablet) running as a kiosk, for example with the Kiosk Satellite app. Four parts, one file:
+Full-screen Home Assistant dashboard cards for an **Echo Show 8** (or any 1280×800 wall tablet) running as a kiosk, for example with the Kiosk Satellite app. Five pages, one file:
 
 | | What it does |
 |---|---|
 | **Weather** (`echo-weather-card`) | Big current conditions, sunrise/sunset, AQI and moon, a 7-day chart and a 48-hour chart. Tap the source name to switch between several weather sources. |
 | **Clock** (`echo-clock-card`) | Laid out like the iOS Clock app, with three tabs. **Alarms**: the Kiosk Satellite app's own alarms, set on rolling hour/minute wheels with repeat days and a label; they ring from the tablet even when Home Assistant or Wi-Fi is down. **Stopwatch**: laps with the best and worst marked. **Timers**: three named timers picked on hour/minute/second wheels, with countdown rings, pause/resume and drag-to-adjust; works with voice commands. |
 | **Media** (`echo-media-card`) | Sonos "now playing" with album art, transport, shuffle/repeat, grouping with per-speaker volume, Sonos favorites, and your Music Assistant library and Spotify (artist → albums → songs). Optional live queue straight from Music Assistant. |
+| **Climate** (`echo-climate-card`) | A smart thermostat run by Home Assistant. A dial with draggable heat and cool setpoints, comfort profiles (Home, Wake, Sleep, Away, Vacation), a weekly schedule you edit on the screen, holds like a real thermostat (until the next change, 2 or 4 hours, permanent, Resume), Away from who's home, room sensors per profile, smart recovery that learns how fast the house warms up, run-time charts, a filter reminder and voice commands. Comes with a reusable **house mode** (home / night / away / vacation) with a manual override. |
 | **Alerts** (`echo-notify`) | Full-screen, must-dismiss alerts over every page: National Weather Service warnings, Home Assistant notifications, or your own automations. |
 | **Settings** (`echo-show-common`) | The gear button on every page opens one settings panel: microphone, camera, brightness, volume, screensaver and wake word for the display (from the Kiosk Satellite app), plus weather, timer, media and alert options and a screen-cleaning mode. While a timer runs, a large countdown floats over the other pages. |
 
@@ -45,7 +46,32 @@ The timers live in Home Assistant, so every screen, automation and voice command
 
 This creates `timer.echo_timer_1..3`, their name helpers, the alarm volume and tone settings, and the `script.echo_timer_start` / `script.echo_timer_cancel` scripts the timers page uses.
 
-### 3. Automations (blueprints, optional)
+### 3. Climate and house mode (optional)
+
+Needed for the climate page. Works with any `climate.*` thermostat that has heat and/or cool setpoints.
+
+1. Copy [`packages/echo_house.yaml`](homeassistant/packages/echo_house.yaml) and [`packages/echo_climate.yaml`](homeassistant/packages/echo_climate.yaml) to `<config>/packages/`, and [`custom_templates/echo_climate.jinja`](homeassistant/custom_templates/echo_climate.jinja) to `<config>/custom_templates/`.
+2. In `echo_climate.yaml`, replace every `climate.thermostat` with your thermostat, and list your room temperature sensors under `rooms:` (or remove the examples).
+3. Restart Home Assistant.
+4. **Turn off the thermostat's own schedule and "smart recovery"**, or it will fight Home Assistant. On a Honeywell T6 Pro Z-Wave: enable the disabled *Schedule Type* and *Adaptive Intelligent Recovery* entities on the device page and set them to *No schedule on thermostat* and *Disable*.
+5. Open the Comfort tab and set each profile's temperatures before the first schedule change.
+
+If Home Assistant is down, the thermostat simply keeps its last setpoints.
+
+**How it works.** `sensor.echo_climate_settings` stores everything (profiles, week, hold, options, learned rates, filter hours) and is only changed through `script.echo_climate_set` and `script.echo_climate_hold`. `sensor.echo_climate_plan` (the `echo_climate.jinja` macro) works out every minute what the thermostat should be doing and why: off, vacation, a permanent hold, away, a temporary hold, smart recovery or the schedule, in that order. The *follow the plan* automation sends the setpoints when they change. A setpoint changed anywhere else (the wall unit, the HA app, Assist) becomes a hold until the next schedule change, so nothing you set is silently undone.
+
+| Voice (Assist) | |
+|---|---|
+| "make it warmer / cooler [by 2 degrees]", "I'm cold" | Holds a degree (or N) warmer or cooler until the next change |
+| "hold the temperature at 70 for 2 hours", "hold the thermostat permanently" | Timed or permanent hold |
+| "resume the schedule", "cancel the hold" | Back to the schedule |
+| "what's the thermostat doing?" | Temperature, setpoints and what's next |
+| "I'm leaving" / "we're home" / "house mode auto" | House override (Away until someone gets home, Home until everyone leaves, back to automatic) |
+| "start / end vacation mode" | Vacation |
+
+**House mode as a framework.** `sensor.echo_house_mode` (home / night / away / vacation) is meant to be the one presence signal for the whole house: follow it (or the `echo_house_mode_changed` event) from lights, notifications or a future alarm panel instead of writing presence logic again. When presence detection gets it wrong, override it from the house button on the climate page or by voice; Away can end by itself when someone arrives. `echo_house.yaml` has a commented example that arms a Manual alarm panel from it.
+
+### 4. Automations (blueprints, optional)
 
 | Blueprint | |
 |---|---|
@@ -54,7 +80,7 @@ This creates `timer.echo_timer_1..3`, their name helpers, the alarm volume and t
 
 Import each one with Settings → Automations → Blueprints → **Import blueprint**, using the file's GitHub URL, then create an automation from it.
 
-### 4. The dashboard
+### 5. The dashboard
 
 1. Settings → Dashboards → **Add dashboard** → *New dashboard from scratch*, URL **`echo-show`**.
 2. Open it → ⋮ → Edit → ⋮ → **Raw configuration editor**, and paste [`homeassistant/dashboards/echo-show.yaml`](homeassistant/dashboards/echo-show.yaml).
@@ -188,6 +214,23 @@ A button with `action: timer-settings` opens the alarm settings (volume, tone, t
 
 Without `ma_url`/`ma_token`, the queue shows the album or playlist last started from any screen; for that, add one `input_text.echo_media_src_<room>` helper per room (max 255), see the package file.
 
+### echo-climate-card
+
+| Option | Default | |
+|---|---|---|
+| `entity` | **required** | Your `climate.*` thermostat. |
+| `outdoor` | | A `weather.*` or temperature sensor shown next to the rooms. |
+| `plan` / `settings` | `sensor.echo_climate_plan` / `sensor.echo_climate_settings` | From the climate package. Without the package the card still works as a plain thermostat (dial, mode, fan). |
+| `house` / `house_settings` | `sensor.echo_house_mode` / `sensor.echo_house_settings` | From the house package; the house button shows only when they exist. |
+| `hold_script` / `set_script` / `house_script` | `echo_climate_hold` / `echo_climate_set` / `echo_house_set` | Script names (without `script.`). |
+| `tabs` | `[now, schedule, comfort, insights]` | Which tabs to show. |
+| `buttons`, `devices`, `timer_prefix`, `idle_path`, `idle_timeout` | | Same as the other cards; a button with `timers:` shows the countdown here too. |
+
+**Now**: drag the orange (heat) or blue (cool) knob, or tap a setpoint chip and use − / +; the change is sent after a short pause as a hold of the default length. *Hold* changes how long the current setting holds; *Comfort* switches to a profile until the next change; *Resume* goes back to the schedule. The room tiles show which sensors the current profile steers by (a target icon), and an offline sensor says to check its battery.
+**Schedule**: tap a day to edit it: each row is "at this time, switch to this profile"; times on wheels; copy the day to others.
+**Comfort**: each profile's heat/cool temperatures and the rooms it cares about (averaged; offline ones are skipped), smart recovery, room comfort, auto away and the default hold length.
+**Insights**: the last 24 hours (temperature, rooms, setpoints, heating/cooling), run time for the week, the learned warm-up and cool-down rates and the filter hours (tap *Changed it* after a new filter).
+
 ### echo-notify
 
 Not a card: it activates on any dashboard whose raw config has a top-level `echo_notify:` block (see the example dashboard) and stays idle everywhere else.
@@ -216,10 +259,12 @@ The cards are edited in `src/`. `dist/echo-show-dashboard.js` is built from them
 ```sh
 node build.js                    # rebuild dist/
 python3 test/validate_ha.py      # check the YAML/Jinja in homeassistant/
+python3 test/climate_plan.py     # scenario tests for the climate plan macro
 node test/smoke.js               # load every card in Chromium (needs Playwright)
+node test/climate.js             # drive the climate card against a fake HA
 ```
 
-`test/index.html#weather` (or `#timers`, `#media`, `#notify`) shows each card against a fake Home Assistant in any browser.
+`test/index.html#weather` (or `#timers`, `#media`, `#climate`, `#climate-schedule`, `#notify`) shows each card against a fake Home Assistant in any browser.
 
 To release: bump `version` in `package.json`, run `node build.js`, commit, then publish a GitHub release with a new tag (e.g. `v1.1.0`). The release workflow attaches the bundle to it, and HACS offers it as an update. Releases marked *pre-release* only show up in HACS for people who enable beta versions.
 

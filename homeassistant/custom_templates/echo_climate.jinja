@@ -1,0 +1,156 @@
+{#- Echo Show climate: the "brain" shared by the climate package and the dashboard card.
+    Copy to <config>/custom_templates/echo_climate.jinja, then call the
+    homeassistant.reload_custom_templates action (or restart Home Assistant).
+
+    echo_climate_plan() looks at the saved settings (sensor.echo_climate_settings), the house
+    mode (sensor.echo_house_mode) and the thermostat, and returns JSON saying what the
+    thermostat should be doing right now and why:
+
+      source        off | vacation | away | hold | preheat | schedule
+      profile       the comfort profile in charge (home, wake, sleep, away, vacation, ...)
+      want_low/high the room temperatures that profile asks for
+      room          the temperature of the rooms that profile watches (average)
+      offset        thermostat reading minus room reading (room compensation)
+      set_low/high  the setpoints to send to the thermostat (want + offset, rounded)
+      control       true when Home Assistant should drive the setpoints (false while a hold
+                    is on or the system is off)
+      period/next   the schedule period now and the next change (profile, start, temps)
+      hold          the hold, with active = still in force
+      preheat       smart recovery: started early to reach the next period on time -#}
+
+{%- macro _profile(P, key, F) -%}
+{%- set d = {'low': 68 if F else 20, 'high': 76 if F else 24.5, 'sensors': ['thermostat']} -%}
+{{- (P[key] if key in P and P[key] is mapping else (P['home'] if 'home' in P else d)) | to_json -}}
+{%- endmacro -%}
+
+{#- Average of a profile's room sensors. "thermostat" is the thermostat's own reading; a
+    sensor that is offline (dead battery) is skipped, and with none left the thermostat
+    reading is used. Returns "<temp>|<key,key>" -#}
+{%- macro _room(sensors, R, tstat) -%}
+{%- set ns = namespace(sum=0, n=0, used=[]) -%}
+{%- for r in R -%}
+  {%- if r.key in sensors -%}
+    {%- set v = tstat if r.key == 'thermostat' else (states(r.entity) | float(none)) -%}
+    {%- if v is not none -%}
+      {%- set ns.sum = ns.sum + v -%}{%- set ns.n = ns.n + 1 -%}{%- set ns.used = ns.used + [r.key] -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if ns.n == 0 and tstat is not none -%}{%- set ns.sum = tstat -%}{%- set ns.n = 1 -%}{%- set ns.used = ['thermostat'] -%}{%- endif -%}
+{{- ((ns.sum / ns.n) | round(1)) if ns.n else 'none' -}}|{{ ns.used | join(',') }}
+{%- endmacro -%}
+
+{%- macro echo_climate_plan(climate='climate.thermostat', store='sensor.echo_climate_settings', house='sensor.echo_house_mode') -%}
+{%- set P = state_attr(store, 'profiles') or {} -%}
+{%- set W = state_attr(store, 'week') or {} -%}
+{%- set H = state_attr(store, 'hold') or {} -%}
+{%- set O = state_attr(store, 'options') or {} -%}
+{%- set L = state_attr(store, 'learn') or {} -%}
+{%- set R = state_attr(store, 'rooms') or [{'key': 'thermostat', 'name': 'Thermostat', 'entity': climate}] -%}
+{%- set F = (state_attr(climate, 'max_temp') | float(100)) > 45 -%}
+{%- set step = O.get('step', 1 if F else 0.5) | float(1) -%}
+{%- set diff = O.get('differential', 3 if F else 1.5) | float(3) -%}
+{%- set T = now() -%}
+{%- set hv = states(climate) -%}
+{%- set tstat = state_attr(climate, 'current_temperature') | float(none) -%}
+{%- set hm = states(house) if has_value(house) else 'home' -%}
+
+{#- ---- where are we in the weekly schedule? ---- -#}
+{%- set DN = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] -%}
+{%- set ns = namespace(cur=none, cur_t=none, nxt=none, nxt_t=none) -%}
+{%- for off in range(-7, 8) -%}
+  {%- set d = T + timedelta(days=off) -%}
+  {%- set k = DN[d.weekday()] -%}
+  {%- for e in (W[k] if k in W else []) | sort(attribute='t') -%}
+    {%- set hh, mm = (e.t ~ ':0').split(':')[:2] -%}
+    {%- set ts = d.replace(hour=hh | int(0), minute=mm | int(0), second=0, microsecond=0) -%}
+    {%- if ts <= T -%}{%- set ns.cur = e.p -%}{%- set ns.cur_t = ts -%}
+    {%- elif ns.nxt is none -%}{%- set ns.nxt = e.p -%}{%- set ns.nxt_t = ts -%}{%- endif -%}
+  {%- endfor -%}
+{%- endfor -%}
+{%- set cur_key = ns.cur if ns.cur is not none else 'home' -%}
+{%- set cp = _profile(P, cur_key, F) | from_json -%}
+{%- set np = _profile(P, ns.nxt, F) | from_json if ns.nxt is not none else none -%}
+
+{#- ---- hold ---- -#}
+{%- set htype = H.get('type', 'none') -%}
+{%- set huntil = as_datetime(H.get('until')) if H.get('until') else none -%}
+{%- set hold_active = htype == 'permanent' or (htype in ['next', 'until'] and huntil is not none and huntil > T) -%}
+
+{#- ---- who is in charge? ---- -#}
+{%- set src = 'schedule' -%}{%- set key = cur_key -%}{%- set prof = cp -%}
+{%- if hv in ['off', 'unavailable', 'unknown'] -%}{%- set src = 'off' -%}
+{%- elif hm == 'vacation' -%}{%- set src = 'vacation' -%}{%- set key = O.get('vacation_profile', 'vacation') -%}{%- set prof = _profile(P, key, F) | from_json -%}
+{%- elif hold_active and htype == 'permanent' -%}{%- set src = 'hold' -%}
+{%- elif hm == 'away' and O.get('away', true) -%}{%- set src = 'away' -%}{%- set key = O.get('away_profile', 'away') -%}{%- set prof = _profile(P, key, F) | from_json -%}
+{%- elif hold_active -%}{%- set src = 'hold' -%}
+{%- endif -%}
+
+{#- ---- room compensation: steer by the rooms the profile cares about ---- -#}
+{%- set rr = _room(prof.get('sensors', ['thermostat']), R, tstat).split('|') -%}
+{%- set room = rr[0] | float(none) -%}
+{%- set used = rr[1].split(',') if rr[1] else [] -%}
+
+{#- ---- smart recovery: start early so the next period is comfortable on time ---- -#}
+{%- set pre = namespace(on=false, lead=0) -%}
+{%- if src == 'schedule' and O.get('preheat', true) and np is not none and room is not none -%}
+  {%- set nr = _room(np.get('sensors', ['thermostat']), R, tstat).split('|')[0] | float(room) -%}
+  {%- set hr = [L.get('heat_rate', 4 if F else 2) | float(4), 0.3] | max -%}
+  {%- set cr = [L.get('cool_rate', 3 if F else 1.5) | float(3), 0.3] | max -%}
+  {%- if hv in ['heat', 'heat_cool'] and np.low | float(0) > cp.low | float(0) and nr < np.low | float(0) -%}
+    {%- set pre.lead = [pre.lead, (np.low | float(0) - nr) / hr * 60] | max -%}
+  {%- endif -%}
+  {%- if hv in ['cool', 'heat_cool'] and np.high | float(0) < cp.high | float(0) and nr > np.high | float(0) -%}
+    {%- set pre.lead = [pre.lead, (nr - np.high | float(0)) / cr * 60] | max -%}
+  {%- endif -%}
+  {%- set pre.lead = [pre.lead, O.get('max_lead', 120) | float(120)] | min | round(0) -%}
+  {%- if pre.lead >= 5 and T >= ns.nxt_t - timedelta(minutes=pre.lead) -%}
+    {%- set pre.on = true -%}{%- set src = 'preheat' -%}{%- set key = ns.nxt -%}{%- set prof = np -%}
+    {%- set rr = _room(np.get('sensors', ['thermostat']), R, tstat).split('|') -%}
+    {%- set room = rr[0] | float(none) -%}{%- set used = rr[1].split(',') if rr[1] else [] -%}
+  {%- endif -%}
+{%- endif -%}
+
+{%- set want_low = prof.get('low', 68 if F else 20) | float(0) -%}
+{%- set want_high = prof.get('high', 76 if F else 24.5) | float(0) -%}
+{%- set offset = 0 -%}
+{%- if O.get('compensate', true) and room is not none and tstat is not none and (used | reject('eq', 'thermostat') | list | count) > 0 -%}
+  {%- set mo = O.get('max_offset', 4 if F else 2) | float(4) -%}
+  {%- set offset = [[tstat - room, mo] | min, -mo] | max -%}
+  {%- set offset = ((offset / step) | round(0)) * step -%}
+{%- endif -%}
+{%- set lo_lim = state_attr(climate, 'min_temp') | float(40 if F else 5) -%}
+{%- set hi_lim = state_attr(climate, 'max_temp') | float(90 if F else 32) -%}
+{%- set set_low = [[((want_low + offset) / step) | round(0) * step, lo_lim] | max, hi_lim] | min -%}
+{%- set set_high = [[((want_high + offset) / step) | round(0) * step, lo_lim] | max, hi_lim] | min -%}
+{%- if hv == 'heat_cool' and set_high - set_low < diff -%}{%- set set_high = set_low + diff -%}{%- endif -%}
+
+{%- set PN = {'home': 'Home', 'wake': 'Wake', 'sleep': 'Sleep', 'away': 'Away', 'vacation': 'Vacation'} -%}
+{%- set out = {
+  'source': src,
+  'profile': key if src != 'hold' else H.get('profile') or 'hold',
+  'profile_name': (prof.get('name') or PN.get(key, key | string | title)) if src != 'hold' else 'Hold',
+  'house': hm,
+  'hvac': hv,
+  'action': state_attr(climate, 'hvac_action'),
+  'thermostat': tstat,
+  'room': room,
+  'rooms_used': used,
+  'offset': offset,
+  'want_low': want_low,
+  'want_high': want_high,
+  'set_low': set_low,
+  'set_high': set_high,
+  'control': src not in ['off', 'hold'],
+  'unit': 'F' if F else 'C',
+  'period': {'profile': cur_key, 'start': ns.cur_t.isoformat() if ns.cur_t else none,
+             'low': cp.get('low'), 'high': cp.get('high')},
+  'next': {'profile': ns.nxt, 'start': ns.nxt_t.isoformat() if ns.nxt_t else none,
+           'low': np.get('low') if np else none, 'high': np.get('high') if np else none,
+           'name': ((np.get('name') if np else none) or PN.get(ns.nxt, ns.nxt | string | title)) if ns.nxt else none},
+  'hold': {'type': htype, 'active': hold_active, 'until': H.get('until'), 'by': H.get('by'),
+           'low': H.get('low'), 'high': H.get('high'), 'profile': H.get('profile')},
+  'preheat': {'active': pre.on, 'lead': pre.lead},
+} -%}
+{{- out | to_json -}}
+{%- endmacro -%}

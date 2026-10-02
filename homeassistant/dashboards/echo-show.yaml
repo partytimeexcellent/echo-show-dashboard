@@ -73,7 +73,8 @@ views:
             open_on_start: true       # ... and when one is started (e.g. by voice)
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
-          - icon: mdi:lightbulb-group  # spare buttons: add navigation_path or url
+          - icon: mdi:thermostat
+            navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings
         devices:
@@ -98,13 +99,45 @@ views:
             active: true
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
-          - icon: mdi:lightbulb-group
+          - icon: mdi:thermostat
+            navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings            # the settings panel (same on every page)
         devices:
           - match: office
             timer_prefix: office_timer
             satellite: assist_satellite.office_echo_show_8         # <-- yours
+
+  - title: Climate
+    path: climate
+    icon: mdi:thermostat
+    type: panel
+    cards:
+      # Needs packages/echo_climate.yaml + echo_house.yaml for the schedule, holds and house
+      # mode; without them it is a plain thermostat page.
+      - type: custom:echo-climate-card
+        entity: climate.thermostat                                 # <-- yours
+        outdoor: weather.home                                      # <-- yours (optional)
+        idle_path: /echo-show/weather
+        idle_timeout: 300
+        buttons:
+          - icon: mdi:weather-partly-cloudy
+            navigation_path: /echo-show/weather
+          - icon: mdi:clock-outline
+            navigation_path: /echo-show/timers
+            timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
+            open_on_done: true
+            open_on_start: true
+          - icon: mdi:speaker-multiple
+            navigation_path: /echo-show/media
+          - icon: mdi:thermostat
+            navigation_path: /echo-show/climate
+            active: true
+          - icon: mdi:cog
+            action: settings
+        devices:
+          - match: office
+            timer_prefix: office_timer
 
   - title: Media
     path: media
@@ -144,7 +177,8 @@ views:
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
             active: true
-          - icon: mdi:lightbulb-group
+          - icon: mdi:thermostat
+            navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings
         devices:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+
+- **Climate page** (`echo-climate-card`): a smart thermostat run by Home Assistant.
+  - **Now**: a dial with the room temperature and draggable heat/cool setpoints (or − / +), what it's doing and why, hold lengths (next change, 2 h, 4 h, permanent) and Resume, comfort profiles, mode and fan, room sensors and today's schedule.
+  - **Schedule**: the week at a glance; tap a day to edit its changes on time wheels and copy it to other days.
+  - **Comfort**: heat/cool temperatures per profile (Home, Wake, Sleep, Away, Vacation) and which rooms each one follows; smart recovery, room comfort, auto away and the default hold length.
+  - **Insights**: last 24 hours, run time this week, learned recovery rates, filter hours.
+  - A house button (top left) shows Home / Night / Away / Vacation and opens a sheet to override presence when it's wrong, and to set guests, vacation and night mode.
+- New `packages/echo_climate.yaml` + `custom_templates/echo_climate.jinja`: profiles, weekly schedule, holds (a change made anywhere else becomes a hold until the next change), away/vacation, room compensation, smart recovery that learns warm-up and cool-down rates, filter run time and reminder, voice commands.
+- New `packages/echo_house.yaml`: house mode (home / night / away / vacation) from every person, with an away delay, guests, vacation and a manual override that can end by itself on arrival or departure. Fires `echo_house_mode_changed`; meant to drive a future alarm panel too.
+- `test/validate_ha.py` now also fails on a `variables:` block that uses its own keys (Home Assistant saves UI scripts with sorted keys) and on non-string keys such as a bare `off:`.
+
 ## 1.5.0
 
 - Clock › Alarms: **delete alarms** by swiping a row to the left and tapping Delete, or with **Edit** (top left), which puts a ✕ on every row. A deleted alarm can be brought back with **Undo** for a few seconds.

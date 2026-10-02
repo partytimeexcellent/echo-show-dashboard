@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.4.0";
+  var VERSION = "1.5.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -77,6 +77,7 @@
     theme_night: "",             // another theme while the sun is down ("" = same)
     weather_sky: null,           // live sky colours behind the weather; null = theme default
     clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
+    climate_tab: null,           // Climate page tab last used here (now/schedule/comfort/insights)
   };
   var Prefs = {
     all: function () {

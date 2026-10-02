@@ -25,10 +25,14 @@ if (/^settings/.test(VIEW)) { TAB = VIEW.split("-")[1] || "general"; VIEW = "wea
 // #clock-alarms, #clock-stopwatch, #clock-timers open the Clock card on that tab.
 var CLOCK_TAB = null;
 if (/^clock/.test(VIEW)) { CLOCK_TAB = VIEW.split("-")[1] || "alarms"; VIEW = "timers"; }
+// #climate, #climate-schedule, #climate-comfort, #climate-insights, #climate-house, #climate-day
+var CLIMATE_TAB = null;
+if (/^climate/.test(VIEW)) { CLIMATE_TAB = VIEW.split("-")[1] || "now"; VIEW = "climate"; }
 try { localStorage.setItem("echo-display", "Kitchen Echo Show 8"); } catch (e) {}
 var THEME = /[?&]theme=([a-z]+)/.exec(location.search);
 window.EchoShow.prefs.set("theme", THEME ? THEME[1] : "midnight");
 if (CLOCK_TAB) window.EchoShow.prefs.set("clock_tab", CLOCK_TAB);
+if (CLIMATE_TAB) window.EchoShow.prefs.set("climate_tab", /^(house|day)$/.test(CLIMATE_TAB) ? (CLIMATE_TAB === "day" ? "schedule" : "now") : CLIMATE_TAB);
 if (/[?&]noalarms/.test(location.search)) try { localStorage.removeItem("echo-clock-alarms:kitchen echo show 8"); } catch (e) {}
 var now = Date.now();
 function S(id, state, attrs) { return { entity_id: id, state: state, attributes: attrs || {}, last_updated: new Date().toISOString(), last_changed: new Date().toISOString() }; }
@@ -126,6 +130,50 @@ function forecast(type) {
   for (var i = 0; i < n; i++) out.push({ datetime: new Date(now + i * step).toISOString(), condition: ["sunny", "partlycloudy", "rainy", "cloudy"][i % 4], temperature: (type === "hourly" ? 50 : 38) + (i % 9) * 4, templow: 28 + (i % 5) * 5, precipitation_probability: (i * 13) % 100, wind_speed: 3 + (i * 7) % 18, wind_bearing: (i * 40) % 360 });
   return out;
 }
+
+// ---- climate (thermostat + the climate/house packages' sensors) ----
+var Q = location.search, HEATING = /[?&]heating/.test(Q), COOLING = /[?&]cooling/.test(Q), HOLD = /[?&]hold/.test(Q), AWAY = /[?&]away/.test(Q), PRE = /[?&]preheat/.test(Q), CMODE = (/[?&]mode=([a-z_]+)/.exec(Q) || [])[1] || "heat_cool";
+put(S("climate.thermostat", CMODE, { hvac_modes: ["off", "heat", "cool", "heat_cool"], min_temp: 32, max_temp: 122, fan_modes: ["Auto low", "Low", "Circulation"], fan_mode: "Auto low",
+  current_temperature: COOLING ? 77 : HEATING ? 66 : 70, current_humidity: 59, temperature: CMODE === "heat" ? 68 : CMODE === "cool" ? 75 : null, target_temp_low: CMODE === "heat_cool" ? (HOLD ? 70 : 68) : null, target_temp_high: CMODE === "heat_cool" ? 76 : null,
+  hvac_action: HEATING ? "heating" : COOLING ? "cooling" : "idle", friendly_name: "Thermostat", supported_features: 411 }));
+put(S("sensor.thermostat_battery_level", "35"));
+put(S("sensor.bedroom_temperature", /[?&]rooms/.test(Q) ? "67.4" : "unavailable"));
+put(S("sensor.bedroom_humidity", /[?&]rooms/.test(Q) ? "52" : "unavailable"));
+put(S("sensor.downstairs_temperature", /[?&]rooms/.test(Q) ? "68.9" : "unavailable"));
+put(S("sensor.downstairs_humidity", /[?&]rooms/.test(Q) ? "55" : "unavailable"));
+put(S("weather.pirate", "cloudy", { temperature: 57, humidity: 81 }));
+var WD = [{ t: "06:30", p: "wake" }, { t: "08:30", p: "home" }, { t: "22:30", p: "sleep" }], WE = [{ t: "07:30", p: "wake" }, { t: "09:30", p: "home" }, { t: "23:00", p: "sleep" }];
+var STORE = {
+  rooms: [{ key: "thermostat", name: "Thermostat", entity: "climate.thermostat" }, { key: "bedroom", name: "Bedroom", entity: "sensor.bedroom_temperature", humidity: "sensor.bedroom_humidity", battery: "sensor.bedroom_climate_battery" }, { key: "downstairs", name: "Downstairs", entity: "sensor.downstairs_temperature", humidity: "sensor.downstairs_humidity" }],
+  profiles: { home: { name: "Home", low: 68, high: 76, sensors: ["thermostat"] }, wake: { name: "Wake", low: 69, high: 75, sensors: ["thermostat"] }, sleep: { name: "Sleep", low: 64, high: 72, sensors: ["bedroom"] }, away: { name: "Away", low: 62, high: 80, sensors: ["thermostat"] }, vacation: { name: "Vacation", low: 55, high: 85, sensors: ["thermostat"] } },
+  week: { mon: WD, tue: WD, wed: WD, thu: WD, fri: [{ t: "06:30", p: "wake" }, { t: "08:30", p: "away" }, { t: "16:00", p: "home" }, { t: "23:30", p: "sleep" }], sat: WE, sun: WE },
+  hold: HOLD ? { type: "next", until: new Date(now + 3.5 * 3600e3).toISOString(), at: new Date(now - 600e3).toISOString(), low: 70, high: 76, by: "thermostat" } : { type: "none" },
+  options: { preheat: true, compensate: true, away: true, default_hold: "next", max_lead: 120, max_offset: 4, differential: 3, step: 1 },
+  learn: { heat_rate: 4.3, cool_rate: 2.8, heat_n: 6, cool_n: 2 }, filter: { hours: /[?&]filter/.test(Q) ? 312 : 142.5, limit: 300, changed: "2026-07-14" },
+};
+put(S("sensor.echo_climate_settings", new Date().toISOString(), STORE));
+var nextT = new Date(now + 2.2 * 3600e3);
+var PLAN = { source: AWAY ? "away" : HOLD ? "hold" : PRE ? "preheat" : CMODE === "off" ? "off" : "schedule", profile: AWAY ? "away" : PRE ? "wake" : "home", profile_name: AWAY ? "Away" : PRE ? "Wake" : "Home", house: AWAY ? "away" : "home", hvac: CMODE,
+  thermostat: 70, room: /[?&]rooms/.test(Q) ? 67.4 : 70, rooms_used: /[?&]rooms/.test(Q) ? ["bedroom"] : ["thermostat"], offset: /[?&]rooms/.test(Q) ? 3 : 0, want_low: AWAY ? 62 : 68, want_high: AWAY ? 80 : 76, set_low: 68, set_high: 76, control: !HOLD, unit: "F",
+  period: { profile: "home", start: new Date(now - 3600e3).toISOString(), low: 68, high: 76 }, next: { profile: "sleep", name: "Sleep", start: nextT.toISOString(), low: 64, high: 72 },
+  hold: Object.assign({ active: HOLD }, STORE.hold), preheat: { active: PRE, lead: PRE ? 45 : 0 } };
+put(S("sensor.echo_climate_plan", PLAN.source, { plan: PLAN }));
+put(S("person.sean", AWAY ? "not_home" : "home", { friendly_name: "Sean" }));
+put(S("person.christine", "unknown", { friendly_name: "Christine" }));
+put(S("sensor.echo_house_mode", AWAY ? "away" : "home", { occupied: !AWAY, override: /[?&]override/.test(Q) ? "home" : "auto", override_until: "manual", source: /[?&]override/.test(Q) ? "override" : "auto", reason: AWAY ? "Nobody is home" : /[?&]override/.test(Q) ? "Set to Home by hand" : "Sean is home",
+  people_home: AWAY ? [] : ["person.sean"], people_away: AWAY ? ["person.sean"] : [], people_unknown: ["person.christine"], night_start: "22:30", night_end: "06:30" }));
+put(S("sensor.echo_house_settings", new Date().toISOString(), { override: /[?&]override/.test(Q) ? "home" : "auto", override_until: "manual", guests: false, vacation: false, night: true, night_start: "22:30", night_end: "06:30", away_delay: 10, people: [] }));
+function climateHistory() {
+  var out = [], t0 = now - 7 * 864e5, low = 64, high = 74, temp = 66;
+  for (var t = t0; t < now; t += 15 * 60e3) {
+    var h = new Date(t).getHours(), want = h >= 6 && h < 22 ? 68 : 64;
+    var act = temp < want - 0.5 ? "heating" : "idle";
+    temp += act === "heating" ? 0.9 : -0.25;
+    out.push({ s: "heat_cool", lu: t / 1000, a: { current_temperature: Math.round(temp * 2) / 2, target_temp_low: want, target_temp_high: 76, hvac_action: act } });
+  }
+  return out;
+}
+function roomHistory(base) { var out = []; for (var t = now - 864e5; t < now; t += 20 * 60e3) out.push({ s: String((base + Math.sin(t / 36e5 / 3) * 1.5).toFixed(1)), lu: t / 1000 }); return out; }
 var calls = [];
 var hass = {
   states: states,
@@ -140,17 +188,19 @@ var hass = {
       var r = Object.assign({ id: m.event_data.id, kiosk: "Kitchen Echo Show 8" }, kiosk(m.event_data));
       setTimeout(function () { (listeners.kiosk_satellite_alarm_result || []).slice().forEach(function (cb) { cb({ event_type: "kiosk_satellite_alarm_result", data: r }); }); }, 250);
       return Promise.resolve({});
-    } if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
+    } if (m.type === "history/history_during_period") { var o = {}; m.entity_ids.forEach(function (id) { o[id] = id.indexOf("climate.") === 0 ? climateHistory() : roomHistory(id.indexOf("bed") !== -1 ? 66 : 69); }); return Promise.resolve(o); }
+    if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
   connection: {
     subscribeMessage: function (cb, msg) { if (msg.type === "weather/subscribe_forecast") setTimeout(function () { cb({ forecast: forecast(msg.forecast_type) }); }, 30); return Promise.resolve(function () {}); },
     subscribeEvents: function (cb, type) { (listeners[type] = listeners[type] || []).push(cb); return Promise.resolve(function () { listeners[type].splice(listeners[type].indexOf(cb), 1); return Promise.resolve(); }); },
     addEventListener: function () {},
   },
 };
-var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"] }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:lightbulb-group" }, { icon: "mdi:cog", action: "settings" }];
+var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"] }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:thermostat", navigation_path: "#climate" }, { icon: "mdi:cog", action: "settings" }];
 var CONFIGS = {
   weather: ["echo-weather-card", { sources: [{ entity: "weather.home", name: "Home" }], sunrise: "sensor.sun_next_rising", sunset: "sensor.sun_next_setting", animations: false, buttons: buttons }],
   timers: ["echo-clock-card", { buttons: buttons, alarm: false }],
+  climate: ["echo-climate-card", { entity: "climate.thermostat", outdoor: "weather.pirate", buttons: buttons.map(function (b, i) { return i === 3 ? Object.assign({ active: true }, b) : b; }) }],
   media: ["echo-media-card", { players: [{ name: "Kitchen", entity: "media_player.kitchen" }, { name: "Living Room", entity: "media_player.living_room" }], default_player: "media_player.kitchen", buttons: buttons, quick_favorites: 0 }],
 };
 var DASH = { echo_notify: { sound: true, sources: { nws: { enabled: false } } }, views: Object.keys(CONFIGS).map(function (k) { return { type: "panel", cards: [Object.assign({ type: "custom:" + CONFIGS[k][0] }, CONFIGS[k][1])] }; }) };
@@ -168,6 +218,8 @@ if (VIEW === "notify") {
   document.body.appendChild(card);
   card.hass = hass;
   window.card = card;
+  if (CLIMATE_TAB === "house") setTimeout(function () { card._openHouse(); }, 300);
+  if (CLIMATE_TAB === "day") setTimeout(function () { card._openDay("fri"); }, 300);
   if (TAB) setTimeout(function () {
     card._buttonTap(buttons[4]);
     setTimeout(function () { var p = document.querySelector("echo-show-settings"); var t = p && p.shadowRoot.querySelector('.tab[data-t="' + TAB + '"]'); if (t) t.click(); }, 300);

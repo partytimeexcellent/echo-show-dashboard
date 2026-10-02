@@ -23,6 +23,7 @@ jobs:
         run: |
           pip install pyyaml jinja2
           python3 test/validate_ha.py
+          python3 test/climate_plan.py
 
   hacs:
     name: HACS

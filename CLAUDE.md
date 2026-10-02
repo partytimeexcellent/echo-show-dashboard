@@ -12,13 +12,21 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
     as `echo-timer-card` (old name). Its Alarms tab drives Kiosk Satellite's on-device alarms by firing
     `kiosk_satellite_alarm` and waiting for `kiosk_satellite_alarm_result` (the protocol of KS's alarm blueprint);
     there is no alarm method on `window.kioskSatellite`. `Wheel` in that file is the iOS-style picker.
+  - `echo-climate-card.js`: thermostat page (Now/Schedule/Comfort/Insights) + house-mode sheet. Reads
+    `sensor.echo_climate_plan` (attribute `plan`) and `sensor.echo_climate_settings`; writes only through
+    `script.echo_climate_hold` / `script.echo_climate_set` / `script.echo_house_set`. Uses `window.EchoClockWheel`.
   - `echo-notify.js`: full-screen alerts (NWS, persistent notifications `echo_*`, `echo_notify` events).
 - `dist/echo-show-dashboard.js`: built bundle, **committed**. HACS installs it.
 - `homeassistant/`: package (timer helpers and scripts), Jinja macros, blueprints, example dashboard.
   `packages/echo_kiosk.yaml` + `custom_templates/echo_kiosk.py`: `shell_command.echo_kiosk`, which the settings
   panel's Alarms tab calls (return_response) to read/set the tablet's `alarms.*` settings over its Remote API and to
   upload the synthesized "Echo …" tones. It reads `echo_kiosk_<name>_url/_token` from secrets.yaml.
-- `test/`: `index.html` is a fake HA (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
+- `homeassistant/packages/echo_climate.yaml` + `echo_house.yaml` + `custom_templates/echo_climate.jinja`: the climate
+  brain. Settings live in trigger-based template sensors updated by events (`echo_climate_set`, `echo_house_set`);
+  `echo_climate_plan()` decides the setpoints. Scripts/automations may be pasted into the HA UI, which saves keys
+  sorted: never use a key from the same `variables:` block (split into steps), and quote YAML-boolean keys (`off:`).
+  `test/climate_plan.py` has scenario tests for the macro.
+- `test/`: `index.html` is a fake HA (`#climate[-schedule|-comfort|-insights|-house|-day]`, `?heating`, `?hold`, `?away`, `?rooms`, `?filter`, `?override`, `?mode=heat`) (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
   `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
   `alarm-list.js` drives the Clock Alarms tab (volume row, swipe/Edit delete, Undo); `alarms-settings.js` drives the settings Alarms tab (fake `shell_command.echo_kiosk`; `?notones`, `?noshell`);
   `smoke.js` loads every card in Playwright; `validate_ha.py` checks the YAML/Jinja.
@@ -26,7 +34,7 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
 ## Workflow
 1. Edit `src/`, bump that file's `VERSION` (and `package.json` for a release), add to CHANGELOG.
 2. `node build.js` (CI runs `node build.js --check`, so always commit the rebuilt dist).
-3. `NODE_PATH=$(npm root -g) node test/smoke.js` and `python3 test/validate_ha.py`.
+3. `NODE_PATH=$(npm root -g) node test/smoke.js`, `node test/climate.js`, `python3 test/validate_ha.py` and `python3 test/climate_plan.py`.
 4. Screenshot changed views with Playwright at 1280×800 and look at them.
 5. Commit, push to main. HACS installs the latest commit; GitHub releases (any tag) attach dist.
 
