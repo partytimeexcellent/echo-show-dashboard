@@ -14,7 +14,7 @@ script reads the two secrets per tablet and makes the request:
     echo_kiosk_<name>_token: <long-lived token from POST /api/login with ttl_days>
 
 Usage: echo_kiosk.py <base64 kiosk name> <op> <base64 JSON data>
-Prints one JSON object. Ops: get, set, test, stop, install_tones, devices.
+Prints one JSON object. Ops: get, set, test, stop, install_tones, devices, logs.
 
 Only the alarm settings (alarms.*) can be read or changed through it. Standard
 library only, so it runs inside the Home Assistant container as is.
@@ -367,6 +367,11 @@ def main():
     if op == "stop":
         call(base, token, "POST", "/api/commands/stopAlarmTonePreview", {})
         out({"ok": True})
+    if op == "logs":   # the tablet's recent log lines about alarms and sound, for troubleshooting
+        r = call(base, token, "GET", "/api/logs") or {}
+        want = re.compile(str(data.get("match") or "alarm|tone|ring|sound|audio"), re.I)
+        lines = [e for e in (r.get("logs") or []) if want.search(json.dumps(e))]
+        out({"ok": True, "logs": lines[-int(data.get("limit") or 40):]})
     if op == "install_tones":
         added = install_tones(base, token, bool(data.get("force")))
         out({"ok": True, "added": added, "sounds": sounds(base, token)})
