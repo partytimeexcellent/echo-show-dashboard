@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.2
+
+- Settings › General: **Wake sound** and **Wake word sensitivity** now control Kiosk Satellite's own entities (`switch.<device>_vs_chimes`, `select.<device>_vs_wake_word_sensitivity`), falling back to the old Voice Satellite ones only when the native ones don't exist.
+- Clock card: the timer beep now pauses while the Echo is listening even when `satellite` still names the old Voice Satellite entity. If the configured satellite is missing or unavailable, the display's native `assist_satellite.<device>_assist_satellite` is used.
+- Timer voice blueprint: the example satellite is the native one, and "stop" falls back to a media player on the device that heard the command when none is set.
+
 ## 1.6.1
 
 - Settings › General: the **Microphone** tile now turns Kiosk Satellite's own **Mute microphone** (`voice.mute`) on and off over the tablet's Remote API, so "Off" really stops the wake word. It used to flip `switch.<device>_mute`, the old dashboard Voice Satellite's mute, which the native wake word ignores. The tile shows the live state from the **VS Mute** entity when the tablet exposes it.

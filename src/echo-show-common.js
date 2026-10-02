@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.1";
+  var VERSION = "1.6.2";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -567,9 +567,9 @@
   EchoShowSettings.prototype._tab_general = function () {
     if (!this._device) return this._noDevice();
     var cam = this._dev("switch", "camera_enabled");
-    var wake = this._dev("switch", "wake_sound"), sat = this._dev("switch", "voice_satellite");
+    var wake = this._dev("switch", "vs_chimes") || this._dev("switch", "wake_sound"), sat = this._dev("switch", "voice_satellite");
     var vol = this._dev("number", "volume"), avol = this._dev("number", "assistant_volume"), mvol = this._dev("number", "media_volume");
-    var sens = this._dev("select", "wake_word_sensitivity");
+    var sens = this._dev("select", "vs_wake_word_sensitivity") || this._dev("select", "wake_word_sensitivity");
     var h = '<div class="sec">Privacy</div><div class="tiles">';
     var ms = this._micState();
     if (ms) {

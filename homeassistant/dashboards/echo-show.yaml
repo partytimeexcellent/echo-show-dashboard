@@ -88,7 +88,7 @@ views:
     cards:
       # Alarms (Kiosk Satellite's own, they ring with no network), stopwatch and timers.
       - type: custom:echo-clock-card
-        satellite: assist_satellite.kitchen_echo_show_8           # <-- yours (alarm pauses while it listens)
+        satellite: assist_satellite.kitchen_kitchen_echo_show_8_assist_satellite  # <-- yours (Kiosk Satellite's own; the alarm pauses while it listens)
         idle_path: /echo-show/weather   # go back here after idle_timeout when no timers run
         idle_timeout: 180
         buttons:
@@ -106,7 +106,7 @@ views:
         devices:
           - match: office
             timer_prefix: office_timer
-            satellite: assist_satellite.office_echo_show_8         # <-- yours
+            satellite: assist_satellite.office_office_echo_show_8_assist_satellite  # <-- yours
 
   - title: Climate
     path: climate

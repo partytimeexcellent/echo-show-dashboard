@@ -12,7 +12,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.2.0";
+  var VERSION = "2.2.1";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -1072,8 +1072,25 @@
 
   var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
 
+  // The assist satellite to watch: the configured one if it exists and isn't unavailable, else this
+  // display's native Kiosk Satellite one (assist_satellite.<device>_assist_satellite).
+  EchoClockCard.prototype._satState = function () {
+    var h = this._hass, st = h ? h.states : null, id = this._config.satellite;
+    if (!st) return null;
+    if (id && st[id] && st[id].state !== "unavailable") return st[id];
+    var slug = this._devSlug;
+    if (slug) {
+      if (this._satAuto && st[this._satAuto] && st[this._satAuto].state !== "unavailable") return st[this._satAuto];
+      this._satAuto = null;
+      for (var k in st) {
+        if (k.indexOf("assist_satellite.") === 0 && k.indexOf(slug) !== -1 && /_assist_satellite$/.test(k) && st[k].state !== "unavailable") { this._satAuto = k; return st[k]; }
+      }
+    }
+    return id ? st[id] || null : null;
+  };
+
   EchoClockCard.prototype._voiceBusy = function () {
-    var sat = this._config.satellite && this._hass ? this._hass.states[this._config.satellite] : null;
+    var sat = this._satState();
     if (sat && VOICE_BUSY[sat.state]) return true;
     return !!(this._voiceHold && Date.now() < this._voiceHold);
   };
@@ -1986,7 +2003,7 @@
       else this._render();
       this._badges();
     }
-    var sat = this._config.satellite ? this._hass.states[this._config.satellite] : null;
+    var sat = this._satState();
     if (sat && VOICE_BUSY[sat.state]) {
       if (this._alarmOn) Sound.hush();
       this._voiceHold = Date.now() + 4000;

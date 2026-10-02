@@ -158,7 +158,7 @@ The old name `custom:echo-timer-card` still works and gives the same card.
 | `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick picks (minutes) shown until this display has Recents. |
 | `alarm` | `true` | Ring in this browser when a timer finishes. |
 | `tone_entity` | `input_select.echo_timer_alarm_tone` | |
-| `satellite` | | `assist_satellite.*` of this display: the alarm pauses while it listens or speaks. |
+| `satellite` | | `assist_satellite.*` of this display (Kiosk Satellite's own, e.g. `assist_satellite.<area>_<name>_assist_satellite`): the alarm pauses while it listens or speaks. If it's missing or unavailable, the display's own one is found automatically. |
 | `idle_path` / `idle_timeout` | / `180` | Go to this path after this many idle seconds when no timer or stopwatch is running. |
 
 #### Alarms

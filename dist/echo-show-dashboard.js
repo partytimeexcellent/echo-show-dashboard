@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.6.1
+ * Echo Show Dashboard 1.6.2
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.6.1, echo-weather-card 1.7.2, echo-clock-card 2.2.0, echo-media-card 1.9.0, echo-climate-card 1.0.1, echo-notify 1.2.0
+ * echo-show-common 1.6.2, echo-weather-card 1.7.2, echo-clock-card 2.2.1, echo-media-card 1.9.0, echo-climate-card 1.0.1, echo-notify 1.2.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -31,7 +31,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.1";
+  var VERSION = "1.6.2";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -576,9 +576,9 @@
   EchoShowSettings.prototype._tab_general = function () {
     if (!this._device) return this._noDevice();
     var cam = this._dev("switch", "camera_enabled");
-    var wake = this._dev("switch", "wake_sound"), sat = this._dev("switch", "voice_satellite");
+    var wake = this._dev("switch", "vs_chimes") || this._dev("switch", "wake_sound"), sat = this._dev("switch", "voice_satellite");
     var vol = this._dev("number", "volume"), avol = this._dev("number", "assistant_volume"), mvol = this._dev("number", "media_volume");
-    var sens = this._dev("select", "wake_word_sensitivity");
+    var sens = this._dev("select", "vs_wake_word_sensitivity") || this._dev("select", "wake_word_sensitivity");
     var h = '<div class="sec">Privacy</div><div class="tiles">';
     var ms = this._micState();
     if (ms) {
@@ -2626,7 +2626,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.2.0";
+  var VERSION = "2.2.1";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -3686,8 +3686,25 @@
 
   var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
 
+  // The assist satellite to watch: the configured one if it exists and isn't unavailable, else this
+  // display's native Kiosk Satellite one (assist_satellite.<device>_assist_satellite).
+  EchoClockCard.prototype._satState = function () {
+    var h = this._hass, st = h ? h.states : null, id = this._config.satellite;
+    if (!st) return null;
+    if (id && st[id] && st[id].state !== "unavailable") return st[id];
+    var slug = this._devSlug;
+    if (slug) {
+      if (this._satAuto && st[this._satAuto] && st[this._satAuto].state !== "unavailable") return st[this._satAuto];
+      this._satAuto = null;
+      for (var k in st) {
+        if (k.indexOf("assist_satellite.") === 0 && k.indexOf(slug) !== -1 && /_assist_satellite$/.test(k) && st[k].state !== "unavailable") { this._satAuto = k; return st[k]; }
+      }
+    }
+    return id ? st[id] || null : null;
+  };
+
   EchoClockCard.prototype._voiceBusy = function () {
-    var sat = this._config.satellite && this._hass ? this._hass.states[this._config.satellite] : null;
+    var sat = this._satState();
     if (sat && VOICE_BUSY[sat.state]) return true;
     return !!(this._voiceHold && Date.now() < this._voiceHold);
   };
@@ -4600,7 +4617,7 @@
       else this._render();
       this._badges();
     }
-    var sat = this._config.satellite ? this._hass.states[this._config.satellite] : null;
+    var sat = this._satState();
     if (sat && VOICE_BUSY[sat.state]) {
       if (this._alarmOn) Sound.hush();
       this._voiceHold = Date.now() + 4000;
@@ -9466,6 +9483,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.6.1", cards: ["echo-show-common 1.6.1","echo-weather-card 1.7.2","echo-clock-card 2.2.0","echo-media-card 1.9.0","echo-climate-card 1.0.1","echo-notify 1.2.0"] };
-  console.info("%c Echo Show Dashboard 1.6.1 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.6.2", cards: ["echo-show-common 1.6.2","echo-weather-card 1.7.2","echo-clock-card 2.2.1","echo-media-card 1.9.0","echo-climate-card 1.0.1","echo-notify 1.2.0"] };
+  console.info("%c Echo Show Dashboard 1.6.2 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();
