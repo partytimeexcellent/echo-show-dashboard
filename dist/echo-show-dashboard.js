@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.2.0
+ * Echo Show Dashboard 1.2.1
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.2.0, echo-weather-card 1.7.0, echo-timer-card 1.8.0, echo-media-card 1.9.0, echo-notify 1.2.0
+ * echo-show-common 1.2.0, echo-weather-card 1.7.1, echo-timer-card 1.8.0, echo-media-card 1.9.0, echo-notify 1.2.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -984,7 +984,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.0";
+  var VERSION = "1.7.1";
 
 
   // ---------- which display is this? ----------
@@ -1369,6 +1369,12 @@
     self._forecasts = {};
     self._subs = [];
     self._subEntity = null;
+    self._subGen = 0;
+    self._subRetry = null;
+    self._subDelay = 0;
+    self._fcLastMsg = 0;
+    self._fcWasDown = false;
+    self._conn = null;
     self._sig = "";
     self._fxSig = "";
     self._chartSig = "";
@@ -1453,6 +1459,8 @@
       this._hass = hass;
       if (!this._config) return;
       if (!this._built) this._build();
+      this._watchConnection();
+      this._checkForecastHealth();
       this._ensureSubscriptions();
       this._update();
       this._updateBadges();
@@ -1466,6 +1474,7 @@
 
   EchoWeatherCard.prototype.connectedCallback = function () {
     if (this._hass && this._config) {
+      this._watchConnection();
       this._ensureSubscriptions();
     }
     var self = this;
@@ -1488,6 +1497,8 @@
     if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
     this._runSeen = null; this._doneSeen = null;
     this._unsubscribe();
+    this._unwatchConnection();
+    if (this._subRetry) { clearTimeout(this._subRetry); this._subRetry = null; }
     if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
     if (this._settingsEl) this._settingsEl.close();
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
@@ -1702,31 +1713,116 @@
     return { daily: (f & 1) !== 0, hourly: (f & 2) !== 0, twice: (f & 4) !== 0 };
   };
 
+  // The forecast arrives over a websocket subscription. Three things can silently kill it, and each
+  // used to leave the chart blank until the page was reloaded:
+  //  - HA restarts: the frontend reconnects before the weather integration has loaded, the library's
+  //    automatic resubscribe fails ("entity not found") and nothing retries it;
+  //  - the first subscribe is rejected (same cause), and the rejected promise blocked any retry;
+  //  - the weather integration reloads: the entity is recreated and the old subscription never fires again.
+  // So: we resubscribe ourselves on reconnect, retry failures with backoff, resubscribe when the entity
+  // comes back from unavailable, and resubscribe if no forecast has arrived for too long.
+
+  EchoWeatherCard.prototype._watchConnection = function () {
+    var conn = this._hass && this._hass.connection;
+    if (!conn || conn === this._conn || !conn.addEventListener) return;
+    var hadConn = !!this._conn;
+    this._unwatchConnection();
+    var self = this;
+    this._conn = conn;
+    if (hadConn) { this._subGen++; this._subs = []; this._subEntity = null; } // new connection object: old subs are gone
+    this._onConnDown = function () {
+      // Old subscription ids die with the socket (and get reused on the new one): forget them, don't unsubscribe.
+      self._subGen++;
+      self._subs = [];
+      self._subEntity = null;
+    };
+    this._onConnReady = function () {
+      if (!self.isConnected) return;
+      self._subDelay = 0;
+      self._ensureSubscriptions();
+    };
+    conn.addEventListener("disconnected", this._onConnDown);
+    conn.addEventListener("ready", this._onConnReady);
+  };
+
+  EchoWeatherCard.prototype._unwatchConnection = function () {
+    if (this._conn && this._conn.removeEventListener) {
+      this._conn.removeEventListener("disconnected", this._onConnDown);
+      this._conn.removeEventListener("ready", this._onConnReady);
+    }
+    this._conn = null;
+  };
+
+  EchoWeatherCard.prototype._resubscribe = function () {
+    this._unsubscribe();
+    this._ensureSubscriptions();
+  };
+
+  EchoWeatherCard.prototype._checkForecastHealth = function () {
+    var ent = this._forecastEntity();
+    var st = ent ? this._state(ent) : null;
+    var down = !st || st.state === "unavailable" || st.state === "unknown";
+    var wasDown = this._fcWasDown;
+    this._fcWasDown = down;
+    if (down || !this._subs.length) return;
+    // Back from unavailable (integration reloaded): the old entity's subscription is dead.
+    if (wasDown) { this._resubscribe(); return; }
+    // Nothing for 90 minutes although providers push every 10-60: assume it's dead.
+    if (this._fcLastMsg && Date.now() - this._fcLastMsg > 90 * 60 * 1000) this._resubscribe();
+  };
+
   EchoWeatherCard.prototype._ensureSubscriptions = function () {
     var ent = this._forecastEntity();
     if (!ent || !this._hass || !this._hass.connection) return;
     if (this._subEntity === ent && this._subs.length) return;
+    if (this._subRetry) return; // a retry is already scheduled
     this._unsubscribe();
-    this._subEntity = ent;
     var sup = this._supports(ent);
     var types = [];
     if (sup.daily) types.push("daily");
     else if (sup.twice) types.push("twice_daily");
     if (sup.hourly) types.push("hourly");
+    if (!types.length) return; // entity not loaded yet; try again on the next update
+    this._subEntity = ent;
     var self = this;
+    var gen = this._subGen;
+    this._fcLastMsg = Date.now();
     types.forEach(function (type) {
       var p = self._hass.connection.subscribeMessage(function (msg) {
-        self._forecasts[ent + "|" + type] = msg.forecast || [];
+        if (gen !== self._subGen) return;
+        self._fcLastMsg = Date.now();
+        self._subDelay = 0;
+        var list = msg.forecast || [];
+        var key = ent + "|" + type;
+        // A provider hiccup sends an empty forecast; keep showing the last good one.
+        if (!list.length && self._forecasts[key] && self._forecasts[key].length) return;
+        self._forecasts[key] = list;
         self._chartSig = "";
         self._renderChart();
-      }, { type: "weather/subscribe_forecast", forecast_type: type, entity_id: ent });
+      }, { type: "weather/subscribe_forecast", forecast_type: type, entity_id: ent }, { resubscribe: false });
+      p.catch(function () {
+        if (gen !== self._subGen) return;
+        self._unsubscribe();
+        self._scheduleRetry();
+      });
       self._subs.push(p);
     });
   };
 
+  EchoWeatherCard.prototype._scheduleRetry = function () {
+    if (this._subRetry) return;
+    var self = this;
+    this._subDelay = Math.min(Math.max(this._subDelay * 2, 5000), 60000);
+    this._subRetry = setTimeout(function () {
+      self._subRetry = null;
+      if (self.isConnected) self._ensureSubscriptions();
+    }, this._subDelay);
+  };
+
   EchoWeatherCard.prototype._unsubscribe = function () {
+    this._subGen++;
     this._subs.forEach(function (p) {
-      Promise.resolve(p).then(function (unsub) { if (typeof unsub === "function") unsub(); }).catch(function () {});
+      Promise.resolve(p).then(function (unsub) { if (typeof unsub === "function") return unsub(); }).catch(function () {});
     });
     this._subs = [];
     this._subEntity = null;
@@ -6281,6 +6377,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.2.0", cards: ["echo-show-common 1.2.0","echo-weather-card 1.7.0","echo-timer-card 1.8.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
-  console.info("%c Echo Show Dashboard 1.2.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.2.1", cards: ["echo-show-common 1.2.0","echo-weather-card 1.7.1","echo-timer-card 1.8.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
+  console.info("%c Echo Show Dashboard 1.2.1 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

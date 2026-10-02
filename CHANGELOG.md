@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- Fixed: the weather forecast chart could go blank and stay blank until the page was reloaded. It happened after a Home Assistant restart (the display reconnected before the weather integration had loaded, and the forecast subscription was never retried) and after the weather integration reloaded. The card now resubscribes after every reconnect, retries failed subscriptions, resubscribes when the weather entity comes back from unavailable or goes quiet for 90 minutes, and keeps the last forecast if the provider briefly sends an empty one.
+
 ## 1.2.0
 
 - **Themes**: a new Look tab in settings with nine colour themes that apply to every page, popup and alert: Midnight (default), Black, Ocean, Forest, Aurora, Ember, Graphite, Night red and Terminal. Optionally switch to a different theme between sunset and sunrise. The weather page's live sky background can be turned off to use the theme's background instead.
