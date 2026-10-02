@@ -66,7 +66,7 @@ views:
           - icon: mdi:weather-partly-cloudy
             navigation_path: /echo-show/weather
             active: true
-          - icon: mdi:timer-sand
+          - icon: mdi:clock-outline
             navigation_path: /echo-show/timers
             timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
             open_on_done: true        # jump to the timers page when a timer finishes
@@ -80,19 +80,20 @@ views:
           - match: office
             timer_prefix: office_timer
 
-  - title: Timers
+  - title: Clock
     path: timers
-    icon: mdi:timer-sand
+    icon: mdi:clock-outline
     type: panel
     cards:
-      - type: custom:echo-timer-card
+      # Alarms (Kiosk Satellite's own, they ring with no network), stopwatch and timers.
+      - type: custom:echo-clock-card
         satellite: assist_satellite.kitchen_echo_show_8           # <-- yours (alarm pauses while it listens)
         idle_path: /echo-show/weather   # go back here after idle_timeout when no timers run
         idle_timeout: 180
         buttons:
           - icon: mdi:weather-partly-cloudy
             navigation_path: /echo-show/weather
-          - icon: mdi:timer-sand
+          - icon: mdi:clock-outline
             navigation_path: /echo-show/timers
             active: true
           - icon: mdi:speaker-multiple
@@ -135,7 +136,7 @@ views:
         buttons:
           - icon: mdi:weather-partly-cloudy
             navigation_path: /echo-show/weather
-          - icon: mdi:timer-sand
+          - icon: mdi:clock-outline
             navigation_path: /echo-show/timers
             timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
             open_on_done: true

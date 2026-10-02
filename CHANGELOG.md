@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0
+
+- **Clock** page (`echo-clock-card`, replaces the timers page; `echo-timer-card` still works as an alias). Reorganised like the iOS Clock app, with Alarms, Stopwatch and Timers tabs.
+  - **Alarms**: lists and manages the Kiosk Satellite app's own alarms. Pick the time on rolling hour/minute (and AM/PM) wheels, choose repeat days and a label, switch alarms on and off, edit and delete. Alarms are stored and scheduled on the tablet as Android alarm clocks, so they ring even when Home Assistant, Wi-Fi or the dashboard is down. Shows the next alarm and a Snooze/Stop bar while one rings.
+  - **Stopwatch**: start, stop, lap and reset, with the fastest and slowest laps marked. Keeps running across page changes and reloads.
+  - **Timers**: new timers are picked on hour/minute/second wheels (seconds are new) with quick-pick chips.
+  - The tab bar shows a dot when a timer, the stopwatch or an alarm is active. A ringing timer brings the Timers tab forward.
+- Settings panel exposes `EchoShow.deviceSlug()` and `EchoShow.devEnt()` for cards.
+
 ## 1.2.1
 
 - Fixed: the weather forecast chart could go blank and stay blank until the page was reloaded. It happened after a Home Assistant restart (the display reconnected before the weather integration had loaded, and the forecast subscription was never retried) and after the weather integration reloaded. The card now resubscribes after every reconnect, retries failed subscriptions, resubscribes when the weather entity comes back from unavailable or goes quiet for 90 minutes, and keeps the last forecast if the provider briefly sends an empty one.

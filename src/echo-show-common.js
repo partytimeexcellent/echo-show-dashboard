@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.2.0";
+  var VERSION = "1.3.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -76,6 +76,7 @@
     theme: "midnight",           // colour theme (THEMES below)
     theme_night: "",             // another theme while the sun is down ("" = same)
     weather_sky: null,           // live sky colours behind the weather; null = theme default
+    clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
   };
   var Prefs = {
     all: function () {
@@ -428,7 +429,7 @@
     has.display = true;
     has.look = true;
     has.weather = cardsOfType(d, "custom:echo-weather-card").length > 0;
-    has.timers = cardsOfType(d, "custom:echo-timer-card").length > 0;
+    has.timers = cardsOfType(d, "custom:echo-timer-card").length + cardsOfType(d, "custom:echo-clock-card").length > 0;
     has.media = cardsOfType(d, "custom:echo-media-card").length > 0;
     has.alerts = !!d.echo_notify;
     has.about = true;
@@ -623,7 +624,7 @@
     if (this._ctx.alarm) {
       for (k in this._ctx.alarm) cfg[k] = this._ctx.alarm[k];   // the timer card's own (per-display) settings
     } else {
-      var tc = cardsOfType(this._dash || {}, "custom:echo-timer-card")[0] || {};
+      var tc = cardsOfType(this._dash || {}, "custom:echo-clock-card")[0] || cardsOfType(this._dash || {}, "custom:echo-timer-card")[0] || {};
       (tc.buttons || []).forEach(function (b) { if (b.settings) for (k in b.settings) if (k !== "device_volume_entity") cfg[k] = b.settings[k]; });
     }
     var es = (this._es && this._es.timers) || {};
@@ -955,6 +956,13 @@
     openSettings: openSettings,
     settingsOpen: function () { return !!current; },
     displayName: echoDisplayName,
+    devEnt: devEnt,
+    // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.
+    deviceSlug: function (hass) {
+      return Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
+        return resolveDevice(hass, r[0], (r[1] || {}).echo_show);
+      }, function () { return null; });
+    },
     mediaStatus: null,            // set by echo-media-card
     theme: function () { return themeById(activeTheme); },
     themes: THEMES,

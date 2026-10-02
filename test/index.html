@@ -22,9 +22,14 @@ window.addEventListener("error", function (e) { errors.push(String(e.message)); 
 var VIEW = location.hash.slice(1) || "weather";
 var TAB = null;
 if (/^settings/.test(VIEW)) { TAB = VIEW.split("-")[1] || "general"; VIEW = "weather"; }
+// #clock-alarms, #clock-stopwatch, #clock-timers open the Clock card on that tab.
+var CLOCK_TAB = null;
+if (/^clock/.test(VIEW)) { CLOCK_TAB = VIEW.split("-")[1] || "alarms"; VIEW = "timers"; }
 try { localStorage.setItem("echo-display", "Kitchen Echo Show 8"); } catch (e) {}
 var THEME = /[?&]theme=([a-z]+)/.exec(location.search);
 window.EchoShow.prefs.set("theme", THEME ? THEME[1] : "midnight");
+if (CLOCK_TAB) window.EchoShow.prefs.set("clock_tab", CLOCK_TAB);
+if (/[?&]noalarms/.test(location.search)) try { localStorage.removeItem("echo-clock-alarms:kitchen echo show 8"); } catch (e) {}
 var now = Date.now();
 function S(id, state, attrs) { return { entity_id: id, state: state, attributes: attrs || {}, last_updated: new Date().toISOString(), last_changed: new Date().toISOString() }; }
 var states = {};
@@ -71,6 +76,37 @@ put(S("sensor." + D + "_ram_available", "717.0"));
 put(S("update." + D + "_update", "on", { installed_version: "2026.9.92", latest_version: "2026.9.98" }));
 put(S("button." + D + "_reload_page", "unknown"));
 put(S("button." + D + "_clear_cache", "unknown"));
+// Kiosk Satellite alarm entities (with the doubled area prefix HA sometimes gives them)
+put(S("binary_sensor.kitchen_" + D + "_alarm_ringing", /[?&]ringing/.test(location.search) ? "on" : "off"));
+put(S("sensor.kitchen_" + D + "_alarm_snoozed_until", "unknown"));
+put(S("button.kitchen_" + D + "_stop_alarm", "unknown"));
+put(S("button.kitchen_" + D + "_snooze_alarm", "unknown"));
+
+// A fake kiosk: answers kiosk_satellite_alarm requests the way Kiosk Satellite does.
+var DN = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"], WN = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+var kioskAlarms = /[?&]noalarms/.test(location.search) ? [] : [
+  { time: "06:30", days: ["mon", "tue", "wed", "thu", "fri"], label: "Work", on: true },
+  { time: "08:15", days: ["sat", "sun"], label: "", on: false },
+  { time: "13:45", days: [], label: "Pizza out", on: true },
+];
+function nextRing(a) {
+  var p = a.time.split(":"), d = new Date();
+  for (var i = 0; i < 8; i++) {
+    var c = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i, +p[0], +p[1]);
+    if (c > d && (!a.days.length || a.days.indexOf(DN[c.getDay()]) !== -1)) return WN[c.getDay()] + " " + c.toISOString().slice(0, 10) + " " + a.time;
+  }
+}
+function describe(a) { var o = { time: a.time, days: a.days.length ? a.days : "once", on: a.on }; if (a.label) o.label = a.label; if (a.on) o.next_ring = nextRing(a); return o; }
+function kiosk(req) {
+  var all = kioskAlarms, m = all.filter(function (a) { return (!req.time || a.time === req.time) && (!req.label || a.label.toLowerCase().indexOf(req.label.toLowerCase()) !== -1); });
+  if (req.action === "list") return { ok: true, result: "listed", alarms: all.map(describe) };
+  if (req.action === "set") { var ex = all.filter(function (a) { return a.time === req.time && a.days.join() === req.days.join(); })[0]; if (ex) { ex.on = true; return { ok: true, result: "already_existed_now_on", alarm: describe(ex) }; } var n = { time: req.time, days: req.days, label: req.label, on: true }; all.push(n); return { ok: true, result: "set", alarm: describe(n) }; }
+  if (!m.length) return { ok: false, error: "no matching alarm" };
+  if (m.length > 1) return { ok: false, error: "several alarms match, ask which one" };
+  if (req.action === "delete") { all.splice(all.indexOf(m[0]), 1); return { ok: true, result: "deleted", alarm: describe(m[0]) }; }
+  m[0].on = req.action === "turn_on"; return { ok: true, result: req.action === "turn_on" ? "turned_on" : "turned_off", alarm: describe(m[0]) };
+}
+var listeners = {};
 
 function forecast(type) {
   var out = [], step = type === "hourly" ? 3600e3 : 86400e3, n = type === "hourly" ? 48 : 7;
@@ -84,17 +120,22 @@ var hass = {
   user: { is_admin: true, name: "Test" },
   language: "en", locale: { language: "en" },
   callService: function (d, s, data) { calls.push([d, s, data]); return Promise.resolve(); },
-  callWS: function (m) { calls.push(["ws", m.type]); if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
+  callWS: function (m) { calls.push(["ws", m.type]);
+    if (m.type === "fire_event" && m.event_type === "kiosk_satellite_alarm") {
+      var r = Object.assign({ id: m.event_data.id, kiosk: "Kitchen Echo Show 8" }, kiosk(m.event_data));
+      setTimeout(function () { (listeners.kiosk_satellite_alarm_result || []).slice().forEach(function (cb) { cb({ event_type: "kiosk_satellite_alarm_result", data: r }); }); }, 250);
+      return Promise.resolve({});
+    } if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
   connection: {
     subscribeMessage: function (cb, msg) { if (msg.type === "weather/subscribe_forecast") setTimeout(function () { cb({ forecast: forecast(msg.forecast_type) }); }, 30); return Promise.resolve(function () {}); },
-    subscribeEvents: function () { return Promise.resolve(function () {}); },
+    subscribeEvents: function (cb, type) { (listeners[type] = listeners[type] || []).push(cb); return Promise.resolve(function () { listeners[type].splice(listeners[type].indexOf(cb), 1); return Promise.resolve(); }); },
     addEventListener: function () {},
   },
 };
-var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:timer-sand", navigation_path: "#timers", timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"] }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:lightbulb-group" }, { icon: "mdi:cog", action: "settings" }];
+var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"] }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:lightbulb-group" }, { icon: "mdi:cog", action: "settings" }];
 var CONFIGS = {
   weather: ["echo-weather-card", { sources: [{ entity: "weather.home", name: "Home" }], sunrise: "sensor.sun_next_rising", sunset: "sensor.sun_next_setting", animations: false, buttons: buttons }],
-  timers: ["echo-timer-card", { buttons: buttons, alarm: false }],
+  timers: ["echo-clock-card", { buttons: buttons, alarm: false }],
   media: ["echo-media-card", { players: [{ name: "Kitchen", entity: "media_player.kitchen" }, { name: "Living Room", entity: "media_player.living_room" }], default_player: "media_player.kitchen", buttons: buttons, quick_favorites: 0 }],
 };
 var DASH = { echo_notify: { sound: true, sources: { nws: { enabled: false } } }, views: Object.keys(CONFIGS).map(function (k) { return { type: "panel", cards: [Object.assign({ type: "custom:" + CONFIGS[k][0] }, CONFIGS[k][1])] }; }) };

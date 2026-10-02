@@ -5,7 +5,7 @@ Full-screen Home Assistant dashboard cards for an **Echo Show 8** (or any 1280×
 | | What it does |
 |---|---|
 | **Weather** (`echo-weather-card`) | Big current conditions, sunrise/sunset, AQI and moon, a 7-day chart and a 48-hour chart. Tap the source name to switch between several weather sources. |
-| **Timers** (`echo-timer-card`) | Three named timers with countdown rings, pause/resume, drag-to-adjust and a slide-to-start control. Rings in the browser with a choice of tones; works with voice commands. |
+| **Clock** (`echo-clock-card`) | Laid out like the iOS Clock app, with three tabs. **Alarms**: the Kiosk Satellite app's own alarms, set on rolling hour/minute wheels with repeat days and a label; they ring from the tablet even when Home Assistant or Wi-Fi is down. **Stopwatch**: laps with the best and worst marked. **Timers**: three named timers picked on hour/minute/second wheels, with countdown rings, pause/resume and drag-to-adjust; works with voice commands. |
 | **Media** (`echo-media-card`) | Sonos "now playing" with album art, transport, shuffle/repeat, grouping with per-speaker volume, Sonos favorites, and your Music Assistant library and Spotify (artist → albums → songs). Optional live queue straight from Music Assistant. |
 | **Alerts** (`echo-notify`) | Full-screen, must-dismiss alerts over every page: National Weather Service warnings, Home Assistant notifications, or your own automations. |
 | **Settings** (`echo-show-common`) | The gear button on every page opens one settings panel: microphone, camera, brightness, volume, screensaver and wake word for the display (from the Kiosk Satellite app), plus weather, timer, media and alert options and a screen-cleaning mode. While a timer runs, a large countdown floats over the other pages. |
@@ -115,17 +115,39 @@ Choices made in the Look, Weather, Media and Alerts tabs (theme, weather source,
 | `animations` | `true` | Animated weather icons. |
 | `storage_key` | `default` | Remembers the chosen source per browser under this key. |
 
-### echo-timer-card
+### echo-clock-card
+
+The old name `custom:echo-timer-card` still works and gives the same card.
 
 | Option | Default | |
 |---|---|---|
+| `tabs` | `[alarms, stopwatch, timers]` | Which tabs to show, in this order. |
+| `default_tab` | | Tab for a display's first visit. After that it opens on the tab last used there, or on Timers when a timer is ringing or has just started. |
+| `alarms` | `true` | The Alarms tab (needs the Kiosk Satellite app). |
+| `kiosk` | this display's name | The Kiosk Satellite device name to manage alarms on. Set it (per display, under `devices`) to manage another kiosk or when the name isn't detected. |
+| `alarm_script` | | A script made from Kiosk Satellite's alarms blueprint. Only needed when the display's Home Assistant user isn't an administrator. |
+| `time_format` | HA profile | `12` or `24` for the alarm wheels and list. |
 | `timer_prefix` | `echo_timer` | Uses `timer.<prefix>_1..3` and `input_text.<prefix>_N_name`. |
 | `start_script` / `cancel_script` | `script.echo_timer_start` / `script.echo_timer_cancel` | |
 | `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick-start minutes. |
 | `alarm` | `true` | Ring in this browser when a timer finishes. |
 | `tone_entity` | `input_select.echo_timer_alarm_tone` | |
 | `satellite` | | `assist_satellite.*` of this display: the alarm pauses while it listens or speaks. |
-| `idle_path` / `idle_timeout` | / `180` | Go to this path after this many idle seconds when no timer is running. |
+| `idle_path` / `idle_timeout` | / `180` | Go to this path after this many idle seconds when no timer or stopwatch is running. |
+
+#### Alarms
+
+Alarms belong to the [Kiosk Satellite](https://kiosksatellite.com/docs/alarms/) app, not to Home Assistant. Each one is stored on the tablet as an Android alarm clock, so it wakes the screen and rings on the alarm stream (a muted media volume doesn't silence it) with no Home Assistant, network or dashboard involved. It rings on Kiosk Satellite's own full-screen view (or its Clock screensaver), with Snooze and Stop, and "stop" by voice works too. Tone, alarm volume, snooze length, sunrise and ease-in are set in Kiosk Satellite under **Settings › Alarms** and apply to every alarm.
+
+The card lists, adds, edits, switches and deletes them by sending the same request Kiosk Satellite's alarm script sends (the `kiosk_satellite_alarm` event naming this display), which the tablet answers over its own Home Assistant connection. So **changing** alarms needs Home Assistant; **ringing** never does. While Home Assistant is unreachable the card shows the last list it saw. Changes made by voice, on the tablet or in Kiosk Satellite's remote admin show up straight away.
+
+Requirements:
+
+- Kiosk Satellite with its **Home Assistant** address and a long-lived token from an **administrator** user (Settings › Home Assistant). Kiosk Satellite only listens for alarm requests with an admin token.
+- The dashboard's Home Assistant user is an administrator, or set `alarm_script` to a script made from [Kiosk Satellite's alarms blueprint](https://github.com/jxlarrea/kiosk-satellite/blob/main/blueprints/script/kiosk_satellite_alarms.yaml) (it's also what lets an LLM voice assistant set alarms).
+- While an alarm rings, the Alarms tab shows Snooze and Stop, using the display's `Stop alarm` / `Snooze alarm` buttons.
+
+Kiosk Satellite has no "edit" request, so editing an alarm deletes it and sets the new one. Alarms are matched by time and label, so two alarms at the same time need different labels to be edited here.
 
 A button with `action: timer-settings` opens the alarm settings (volume, tone, test). Its `settings: {device_volume_entity: number.x}` lets **Test** use the display's real volume.
 

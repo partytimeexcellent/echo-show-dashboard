@@ -10,12 +10,12 @@ const path = require("path");
   page.on("pageerror", (e) => pageErrors.push(e.message));
   const url = "file://" + path.join(__dirname, "index.html");
   let failed = false;
-  for (const view of ["weather", "timers", "media", "notify"]) {
+  for (const view of ["weather", "timers", "clock-alarms", "clock-stopwatch", "media", "notify"]) {
     await page.goto(url + "#" + view);
     await page.reload();
     await page.waitForTimeout(1200);
     const r = await page.evaluate(() => ({
-      defined: ["echo-weather-card", "echo-timer-card", "echo-media-card", "echo-alarm-settings"].filter((n) => !customElements.get(n)),
+      defined: ["echo-weather-card", "echo-clock-card", "echo-timer-card", "echo-media-card", "echo-alarm-settings"].filter((n) => !customElements.get(n)),
       notify: !!window.echoNotify,
       bundle: window.EchoShowDashboard,
       errors: window.errors,

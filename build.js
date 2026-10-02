@@ -22,7 +22,7 @@ var pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 var FILES = [
   "echo-show-common.js",
   "echo-weather-card.js",
-  "echo-timer-card.js",
+  "echo-clock-card.js",
   "echo-media-card.js",
   "echo-notify.js",
 ];

@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.2.1
+ * Echo Show Dashboard 1.3.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.2.0, echo-weather-card 1.7.1, echo-timer-card 1.8.0, echo-media-card 1.9.0, echo-notify 1.2.0
+ * echo-show-common 1.3.0, echo-weather-card 1.7.1, echo-clock-card 2.0.0, echo-media-card 1.9.0, echo-notify 1.2.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -31,7 +31,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.2.0";
+  var VERSION = "1.3.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -85,6 +85,7 @@
     theme: "midnight",           // colour theme (THEMES below)
     theme_night: "",             // another theme while the sun is down ("" = same)
     weather_sky: null,           // live sky colours behind the weather; null = theme default
+    clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
   };
   var Prefs = {
     all: function () {
@@ -437,7 +438,7 @@
     has.display = true;
     has.look = true;
     has.weather = cardsOfType(d, "custom:echo-weather-card").length > 0;
-    has.timers = cardsOfType(d, "custom:echo-timer-card").length > 0;
+    has.timers = cardsOfType(d, "custom:echo-timer-card").length + cardsOfType(d, "custom:echo-clock-card").length > 0;
     has.media = cardsOfType(d, "custom:echo-media-card").length > 0;
     has.alerts = !!d.echo_notify;
     has.about = true;
@@ -632,7 +633,7 @@
     if (this._ctx.alarm) {
       for (k in this._ctx.alarm) cfg[k] = this._ctx.alarm[k];   // the timer card's own (per-display) settings
     } else {
-      var tc = cardsOfType(this._dash || {}, "custom:echo-timer-card")[0] || {};
+      var tc = cardsOfType(this._dash || {}, "custom:echo-clock-card")[0] || cardsOfType(this._dash || {}, "custom:echo-timer-card")[0] || {};
       (tc.buttons || []).forEach(function (b) { if (b.settings) for (k in b.settings) if (k !== "device_volume_entity") cfg[k] = b.settings[k]; });
     }
     var es = (this._es && this._es.timers) || {};
@@ -964,6 +965,13 @@
     openSettings: openSettings,
     settingsOpen: function () { return !!current; },
     displayName: echoDisplayName,
+    devEnt: devEnt,
+    // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.
+    deviceSlug: function (hass) {
+      return Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
+        return resolveDevice(hass, r[0], (r[1] || {}).echo_show);
+      }, function () { return null; });
+    },
     mediaStatus: null,            // set by echo-media-card
     theme: function () { return themeById(activeTheme); },
     themes: THEMES,
@@ -2378,20 +2386,22 @@
   if (window.console && console.info) console.info("echo-weather-card " + VERSION);
 })();
 
-/* ===== echo-timer-card.js ===== */
+/* ===== echo-clock-card.js ===== */
 /*
- * echo-timer-card
- * Full-screen timers page for an Echo Show 8 kiosk (companion to echo-weather-card).
- * Shows up to three HA timer helpers side by side, each with a countdown ring,
- * pause/resume, adjust (drag to add/remove time) and cancel, plus an iOS-style
- * drag slider to start a new one. The alarm sound is synthesised with Web Audio.
+ * echo-clock-card (also registered as echo-timer-card)
+ * Full-screen Clock page for an Echo Show 8 kiosk, laid out like the iOS Clock app:
+ *  - Alarms: the Kiosk Satellite app's own alarms. They live on the tablet and ring with no
+ *    Home Assistant, network or dashboard; the card lists, adds, edits and switches them.
+ *  - Stopwatch: start/stop, laps (best and worst marked), kept per display across reloads.
+ *  - Timers: up to three HA timer helpers with countdown rings, pause/resume, adjust and
+ *    cancel; new ones are picked on hour/minute/second wheels. Rings with Web Audio.
  *
  * Plain JavaScript, no dependencies, no build step. ES5-ish for older Chromium.
  */
 (function () {
   "use strict";
 
-  var VERSION = "1.8.0";
+  var VERSION = "2.0.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -2791,37 +2801,346 @@
     return el;
   };
 
+  // ---------- rolling wheel picker (iOS style) ----------
+  // A drum of values you drag, flick, tap or scroll. Plain DOM, no custom element, so it can
+  // live inside any shadow root. Seven rows are drawn; the middle one is the value.
+
+  var WR = 3;                         // rows drawn either side of the middle
+  var WTH = 21 * Math.PI / 180;       // angle between rows on the drum
+
+  function Wheel(o) {
+    this.values = o.values;
+    this.n = o.values.length;
+    this.loop = o.loop !== false;
+    this.p = o.index || 0;            // fractional row under the middle
+    this.onChange = o.onChange || null;
+    this.onSpin = o.onSpin || null;
+    var el = document.createElement("div");
+    el.className = "wheel" + (o.cls ? " " + o.cls : "");
+    this.items = [];
+    for (var i = 0; i < 2 * WR + 1; i++) {
+      var d = document.createElement("div");
+      d.className = "wi";
+      el.appendChild(d);
+      this.items.push(d);
+    }
+    if (o.unit) {
+      var u = document.createElement("div");
+      u.className = "wu";
+      u.textContent = o.unit;
+      el.appendChild(u);
+    }
+    this.el = el;
+    this._last = this.value();
+    this._bind();
+  }
+
+  Wheel.prototype._h = function () {
+    var h = this.el.clientHeight / 5;
+    if (h > 0) this.H = h;
+    return this.H || 48;
+  };
+
+  Wheel.prototype._mod = function (i) { return ((i % this.n) + this.n) % this.n; };
+
+  Wheel.prototype.value = function () {
+    var i = Math.round(this.p);
+    return this.loop ? this._mod(i) : Math.max(0, Math.min(this.n - 1, i));
+  };
+
+  Wheel.prototype.paint = function () {
+    var H = this._h(), rad = H / WTH, c = Math.round(this.p);
+    for (var k = -WR; k <= WR; k++) {
+      var it = this.items[k + WR], idx = c + k, d = idx - this.p, a = d * WTH;
+      if ((!this.loop && (idx < 0 || idx >= this.n)) || Math.abs(a) >= Math.PI / 2) {
+        it.style.visibility = "hidden";
+        continue;
+      }
+      it.style.visibility = "";
+      var txt = String(this.values[this._mod(idx)]);
+      if (it.textContent !== txt) it.textContent = txt;
+      it.style.height = H + "px";
+      it.style.lineHeight = H + "px";
+      it.style.marginTop = (-H / 2) + "px";
+      it.style.transform = "translateY(" + (rad * Math.sin(a)).toFixed(2) + "px) scaleY(" + Math.cos(a).toFixed(3) + ")";
+      var ad = Math.abs(d);
+      it.style.opacity = (ad < 0.5 ? 1 : Math.max(0.1, 0.6 - ad * 0.13)).toFixed(2);
+      var sel = ad < 0.5;
+      if (sel !== it.classList.contains("sel")) it.classList.toggle("sel");
+    }
+    var v = this.value();
+    if (v !== this._spun) { this._spun = v; if (this.onSpin) this.onSpin(v); }
+  };
+
+  // Go to a value (by index), the short way round on a looping wheel.
+  Wheel.prototype.set = function (i, animate) {
+    var base = Math.round(this.p), target = i;
+    if (this.loop) {
+      var d = i - this._mod(base);
+      if (d > this.n / 2) d -= this.n;
+      if (d < -this.n / 2) d += this.n;
+      target = base + d;
+    }
+    if (animate) this._animTo(target, 320);
+    else { this._stop(); this.p = target; this._last = this.value(); this.paint(); }
+  };
+
+  Wheel.prototype._stop = function () {
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
+  };
+
+  Wheel.prototype._animTo = function (target, ms) {
+    var self = this, from = this.p, t0 = null;
+    if (!this.loop) target = Math.max(0, Math.min(this.n - 1, target));
+    this._stop();
+    function step(t) {
+      if (t0 === null) t0 = t;
+      var f = Math.min(1, (t - t0) / ms);
+      var e = 1 - Math.pow(1 - f, 3);
+      self.p = from + (target - from) * e;
+      self.paint();
+      if (f < 1) { self._raf = requestAnimationFrame(step); return; }
+      self._raf = null;
+      self.p = target;
+      self.paint();
+      var v = self.value();
+      if (v !== self._last) { self._last = v; if (self.onChange) self.onChange(v); }
+    }
+    this._raf = requestAnimationFrame(step);
+  };
+
+  Wheel.prototype._bind = function () {
+    var self = this, el = this.el, drag = null;
+    el.addEventListener("pointerdown", function (ev) {
+      if (ev.button > 0) return;
+      self._stop();
+      drag = { y: ev.clientY, p: self.p, moved: false, s: [[Date.now(), ev.clientY]] };
+      self.dragging = true;
+      try { el.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      ev.preventDefault();
+      ev.stopPropagation();
+    });
+    el.addEventListener("pointermove", function (ev) {
+      if (!drag) return;
+      var dy = ev.clientY - drag.y;
+      if (Math.abs(dy) > 6) drag.moved = true;
+      var p = drag.p - dy / self._h();
+      if (!self.loop) {             // rubber band past the ends
+        if (p < 0) p = p * 0.35;
+        if (p > self.n - 1) p = self.n - 1 + (p - self.n + 1) * 0.35;
+      }
+      self.p = p;
+      self.paint();
+      var now = Date.now();
+      drag.s.push([now, ev.clientY]);
+      while (drag.s.length > 2 && now - drag.s[0][0] > 120) drag.s.shift();
+    });
+    function end(ev, cancelled) {
+      if (!drag) return;
+      var d = drag, H = self._h();
+      drag = null;
+      self.dragging = false;
+      if (cancelled) { self._animTo(Math.round(self.p), 200); return; }
+      if (!d.moved) {
+        // A tap on a row above or below the middle rolls to it.
+        var r = el.getBoundingClientRect();
+        var off = (ev.clientY - (r.top + r.height / 2)) / (H / WTH);
+        var rows = Math.round(Math.asin(Math.max(-1, Math.min(1, off))) / WTH);
+        self._animTo(Math.round(self.p) + rows, 260);
+        return;
+      }
+      var a = d.s[0], b = d.s[d.s.length - 1], dt = Math.max(16, b[0] - a[0]);
+      var v = -(b[1] - a[1]) / dt / H;      // rows per ms
+      if (Date.now() - b[0] > 80) v = 0;     // held still before letting go
+      var target = Math.round(self.p + v * 300);
+      var ms = Math.max(240, Math.min(900, 220 + Math.abs(target - self.p) * 55));
+      self._animTo(target, ms);
+    }
+    el.addEventListener("pointerup", function (ev) { end(ev, false); });
+    el.addEventListener("pointercancel", function (ev) { end(ev, true); });
+    var acc = 0;
+    el.addEventListener("wheel", function (ev) {
+      ev.preventDefault();
+      acc += ev.deltaY;
+      if (Math.abs(acc) < 30) return;
+      var step = acc > 0 ? 1 : -1;
+      acc = 0;
+      self._animTo(Math.round(self.p) + step, 160);
+    }, { passive: false });
+  };
+
+  function range(a, b, pad) {
+    var out = [];
+    for (var i = a; i <= b; i++) out.push(pad && i < 10 ? "0" + i : String(i));
+    return out;
+  }
+
+  // ---------- Kiosk Satellite alarms ----------
+  // Kiosk Satellite keeps its alarms on the tablet as Android alarm clocks: they ring with no
+  // Home Assistant, network or dashboard (kiosksatellite.com/docs/alarms). The page can't reach
+  // them through window.kioskSatellite, so the card asks the kiosk over Home Assistant the same
+  // way Kiosk Satellite's alarm script does: it fires `kiosk_satellite_alarm` naming this
+  // display, and the kiosk answers with `kiosk_satellite_alarm_result`. Changing alarms needs
+  // Home Assistant; ringing never does.
+
+  function alarmRequest(hass, kiosk, data, script) {
+    var req = {
+      action: data.action,
+      time: data.time || "",
+      days: data.days || [],
+      label: data.label || "",
+      kiosk: kiosk,
+    };
+    if (script) {
+      // A script made from Kiosk Satellite's blueprint: works for non-admin dashboard users.
+      return hass.callWS({ type: "call_service", domain: "script", service: String(script).replace(/^script\./, ""), service_data: req, return_response: true })
+        .then(function (r) { return (r && r.response) || { ok: false, error: "no response" }; },
+          function (e) { return { ok: false, error: (e && e.message) || "script failed" }; });
+    }
+    req.id = Date.now() + "-" + Math.floor(Math.random() * 1e6);
+    return new Promise(function (resolve) {
+      var done = false, unsub = null;
+      var timer = setTimeout(function () { finish({ ok: false, error: "timeout" }); }, 8000);
+      function finish(r) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (unsub) { try { var u = unsub(); if (u && u.catch) u.catch(function () {}); } catch (e) { /* ignore */ } }
+        resolve(r);
+      }
+      hass.connection.subscribeEvents(function (ev) {
+        if (ev && ev.data && ev.data.id === req.id) finish(ev.data);
+      }, "kiosk_satellite_alarm_result").then(function (u) {
+        unsub = u;
+        if (done) { finish({}); return; }
+        return hass.callWS({ type: "fire_event", event_type: "kiosk_satellite_alarm", event_data: req });
+      }).catch(function (e) {
+        finish({ ok: false, refused: true, error: (e && e.message) || "refused" });
+      });
+    });
+  }
+
+  var DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  var DAY_SHORT = { sun: "Sun", mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat" };
+  var DAY_LETTER = ["S", "M", "T", "W", "T", "F", "S"];
+
+  function daysOf(a) { return a && a.days && a.days !== "once" && a.days.length ? a.days : []; }
+
+  function daysText(days) {
+    if (!days.length) return "";
+    var set = {};
+    days.forEach(function (d) { set[d] = 1; });
+    var n = days.length;
+    if (n === 7) return "Every day";
+    if (n === 5 && !set.sat && !set.sun) return "Weekdays";
+    if (n === 2 && set.sat && set.sun) return "Weekends";
+    return DAY_KEYS.filter(function (d) { return set[d]; }).map(function (d) { return DAY_SHORT[d]; }).join(" ");
+  }
+
+  // "Monday 2026-10-05 06:30" (the kiosk's local time) -> ms
+  function parseNextRing(s) {
+    var m = /(\d{4})-(\d{2})-(\d{2})\D+(\d{1,2}):(\d{2})/.exec(s || "");
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() : 0;
+  }
+
+  function fmtIn(ms) {
+    var min = Math.max(1, Math.round(ms / 60000));
+    if (min < 60) return "in " + min + " min";
+    var h = Math.floor(min / 60), m = min % 60;
+    if (h < 24) return "in " + h + " hr" + (m ? " " + m + " min" : "");
+    var dd = Math.round(h / 24);
+    return "in " + dd + " day" + (dd > 1 ? "s" : "");
+  }
+
+  function dayWord(ts) {
+    var d = new Date(ts), t = new Date();
+    var a = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    var b = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+    var diff = Math.round((a - b) / 86400000);
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Tomorrow";
+    return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()];
+  }
+
+  // ---------- stopwatch state (per display, survives page changes and reloads) ----------
+
+  var SW_KEY = "echo-stopwatch";
+  function swLoad() {
+    try {
+      var s = JSON.parse(window.localStorage.getItem(SW_KEY) || "null");
+      if (s && typeof s.acc === "number" && s.laps && s.laps.length !== undefined) return s;
+    } catch (e) { /* storage unavailable */ }
+    return { start: null, acc: 0, laps: [] };
+  }
+  function swSave(s) {
+    try { window.localStorage.setItem(SW_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ }
+  }
+  function swElapsed(s) { return s.acc + (s.start ? Date.now() - s.start : 0); }
+  function fmtSw(ms) {
+    ms = Math.max(0, Math.floor(ms));
+    var cs = Math.floor(ms / 10) % 100, sec = Math.floor(ms / 1000), h = Math.floor(sec / 3600);
+    var m = Math.floor(sec / 60) % 60, s = sec % 60;
+    var t = (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s + "." + (cs < 10 ? "0" : "") + cs;
+    return h ? h + ":" + t : t;
+  }
+
   // ---------- card styles ----------
 
   var STYLE = [
     ":host{display:block;height:100vh;width:100%;overflow:hidden;font-family:var(--es-font,var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif));color:#fff;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;}",
     ".root{position:relative;height:100vh;width:100%;overflow:hidden;box-sizing:border-box;background:var(--es-bg,radial-gradient(110% 90% at 0% 0%,#223567 0%,rgba(34,53,103,0) 60%),radial-gradient(90% 80% at 100% 100%,#0d3b4f 0%,rgba(13,59,79,0) 60%),#0a1022);}",
     ".content{position:relative;height:100vh;box-sizing:border-box;padding:2vh 2.5vh 2vh 2.5vh;display:flex;flex-direction:column;}",
-    ".main{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:stretch;gap:2vh;}",
-    /* one thing on screen: no tile frame, it sits straight on the background */
+    "ha-icon{display:inline-flex;}",
+    /* top bar: segmented control in the middle, a context button on the right */
+    ".top{flex:0 0 auto;display:flex;align-items:center;justify-content:center;position:relative;height:8vh;margin-bottom:1.6vh;}",
+    ".seg{display:flex;padding:.6vh;border-radius:3.4vh;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.08);}",
+    ".sg{position:relative;min-width:21vh;height:6.4vh;padding:0 2.6vh;border-radius:2.8vh;display:flex;align-items:center;justify-content:center;font-size:3vh;color:rgba(255,255,255,.66);cursor:pointer;box-sizing:border-box;}",
+    ".sg ha-icon{--mdc-icon-size:3.2vh;width:3.2vh;height:3.2vh;margin-right:1vh;}",
+    ".sg.sel{background:rgba(255,255,255,.16);color:#fff;box-shadow:0 .3vh 1vh rgba(0,0,0,.25);}",
+    ".sg .bdg{position:absolute;top:1vh;right:1.4vh;width:1.2vh;height:1.2vh;border-radius:50%;background:var(--es-acc,#ff9f0a);display:none;}",
+    ".sg .bdg.on{display:block;}.sg .bdg.red{background:#ff453a;}",
+    ".tb{position:absolute;right:0;top:0;width:8vh;height:8vh;border-radius:50%;display:none;align-items:center;justify-content:center;cursor:pointer;background:rgba(var(--es-acc-rgb,255,159,10),.2);border:1px solid rgba(var(--es-acc-rgb,255,159,10),.5);color:var(--es-hi2,#ffc266);}",
+    ".tb ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;}",
+    ".root[data-tab=alarms] .tb.add-alarm{display:flex;}",
+    ".tb:active,.sg:active{transform:scale(.95);}",
+    /* panes */
+    ".pane{position:relative;flex:1 1 auto;min-height:0;display:none;}",
+    ".root[data-tab=alarms] .p-alarms,.root[data-tab=stopwatch] .p-sw,.root[data-tab=timers] .p-timers{display:flex;}",
+    /* ===== wheels ===== */
+    ".wheels{position:relative;display:flex;justify-content:center;align-items:center;gap:1vh;}",
+    ".wheels::before{content:'';position:absolute;left:0;right:0;top:50%;height:var(--wrow,6.6vh);margin-top:calc(var(--wrow,6.6vh) / -2);border-radius:1.8vh;background:rgba(255,255,255,.1);pointer-events:none;}",
+    ".wheel{position:relative;height:calc(var(--wrow,6.6vh) * 5);width:var(--ww,13vh);touch-action:none;cursor:ns-resize;overflow:hidden;" +
+      "-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 30%,#000 70%,transparent 100%);mask-image:linear-gradient(180deg,transparent 0,#000 30%,#000 70%,transparent 100%);}",
+    ".wi{position:absolute;left:0;right:0;top:50%;text-align:center;font-size:var(--wfs,4.4vh);font-variant-numeric:tabular-nums;color:rgba(255,255,255,.9);will-change:transform;}",
+    ".wi.sel{color:#fff;}",
+    ".wheel.unitd .wi{text-align:right;padding-right:calc(var(--ww,13vh) * .48);box-sizing:border-box;}",
+    ".wu{position:absolute;top:50%;left:54%;transform:translateY(-50%);font-size:2.6vh;font-weight:500;color:rgba(255,255,255,.9);pointer-events:none;white-space:nowrap;}",
+    ".wheel.hrs{width:calc(var(--ww,13vh) * 1.2);}",
+    ".wheel.hrs.unitd .wi{padding-right:calc(var(--ww,13vh) * .62);}",
+    ".wheel.hrs .wu{left:50%;}",
+    ".wheel.ampm{width:11vh;}",
+    /* ===== timers (HA timer helpers) ===== */
+    ".main{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:stretch;gap:2vh;width:100%;}",
     ".main.solo .tile{background:none;border-color:transparent;box-shadow:none;}",
     ".main.solo .tile.done::before{border-radius:3.6vh;}",
-    /* small round buttons in the top-right corner: "+" to add a timer, "x" to close the adder */
-    ".corner{position:absolute;top:1.4vh;right:1.4vh;z-index:3;width:8vh;height:8vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;" +
+    ".corner{position:absolute;top:-9.6vh;right:0;z-index:3;width:8vh;height:8vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;" +
       "background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.92);}",
     ".corner.plus{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.5);color:var(--es-hi2,#ffc266);}",
-    ".corner ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;display:inline-flex;}",
+    ".corner ha-icon{--mdc-icon-size:4.6vh;width:4.6vh;height:4.6vh;}",
     ".corner:active{transform:scale(.92);}",
-    /* tiles */
-    ".tile{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;box-sizing:border-box;padding:2.8vh 2vh 3vh;border-radius:3.6vh;overflow:hidden;" +
+    ".tile{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;box-sizing:border-box;padding:2.4vh 2vh 2.6vh;border-radius:3.6vh;overflow:hidden;" +
       "background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.09);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);}",
     ".tile::before{content:'';position:absolute;left:0;top:0;right:0;bottom:0;border-radius:inherit;background:linear-gradient(180deg,rgba(255,69,58,.32),rgba(255,69,58,.1));opacity:0;pointer-events:none;}",
     ".tile.done{border-color:rgba(255,99,88,.6);}",
     ".tile.done::before{animation:etc-glow 1.4s ease-in-out infinite;}",
     "@keyframes etc-glow{0%,100%{opacity:.35;}50%{opacity:1;}}",
     ".tile > *{position:relative;}",
-    ".head{display:flex;align-items:center;justify-content:center;gap:1.2vh;max-width:100%;font-size:3.8vh;line-height:1.1;letter-spacing:.01em;}",
+    ".head{display:flex;align-items:center;justify-content:center;gap:1.2vh;max-width:100%;font-size:3.6vh;line-height:1.1;letter-spacing:.01em;}",
     ".head .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
     ".head .dot{flex:0 0 auto;width:1.4vh;height:1.4vh;border-radius:50%;background:var(--es-acc,#ff9f0a);box-shadow:0 0 1.2vh rgba(var(--es-acc-rgb,255,159,10),.8);}",
     ".paused .head .dot{background:rgba(255,255,255,.45);box-shadow:none;}",
     ".done .head .dot{background:#ff453a;box-shadow:0 0 1.2vh rgba(255,69,58,.9);}",
     ".cap{font-size:2.6vh;letter-spacing:.12em;text-transform:uppercase;opacity:.55;}",
-    /* ring */
     ".ring{position:relative;width:var(--ring,40vh);height:var(--ring,40vh);cursor:pointer;}",
     ".ring > svg{position:absolute;left:0;top:0;width:100%;height:100%;}",
     ".ring .trk{fill:none;stroke:rgba(255,255,255,.08);stroke-width:3.2;}",
@@ -2832,22 +3151,20 @@
     ".ring .mid{position:absolute;left:0;top:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}",
     ".clock{font-size:var(--clock,10vh);font-weight:300;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}",
     ".clock.long{font-size:calc(var(--clock,10vh) * .78);}",
-    ".sub{font-size:2.7vh;opacity:.6;margin-top:1.4vh;display:flex;align-items:center;white-space:nowrap;}",
-    ".sub ha-icon{--mdc-icon-size:2.7vh;width:2.7vh;height:2.7vh;display:inline-flex;margin-right:.6vh;}",
+    ".sub{font-size:2.6vh;opacity:.6;margin-top:1.4vh;display:flex;align-items:center;white-space:nowrap;}",
+    ".sub ha-icon{--mdc-icon-size:2.6vh;width:2.6vh;height:2.6vh;margin-right:.6vh;}",
     ".done .clock{animation:etc-blink 1s steps(1) infinite;color:#ff7a70;}",
     "@keyframes etc-blink{50%{opacity:.25;}}",
-    /* round controls */
     ".ctl{display:flex;gap:2.6vh;align-items:center;}",
-    ".rb{width:10vh;height:10vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08);}",
-    ".rb ha-icon{--mdc-icon-size:5vh;width:5vh;height:5vh;display:inline-flex;}",
+    ".rb{width:9.6vh;height:9.6vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08);}",
+    ".rb ha-icon{--mdc-icon-size:4.8vh;width:4.8vh;height:4.8vh;}",
     ".rb.pause{background:rgba(var(--es-acc-rgb,255,159,10),.18);border-color:rgba(var(--es-acc-rgb,255,159,10),.35);color:var(--es-hi,#ffb340);}",
     ".rb.play{background:rgba(52,199,89,.18);border-color:rgba(52,199,89,.4);color:#5ee07f;}",
-    ".rb:active,.chip:active,.go:active,.btn:active,.wide:active{transform:scale(.95);}",
-    ".wide{height:10vh;border-radius:5vh;padding:0 3.6vh;display:flex;align-items:center;justify-content:center;font-size:3.6vh;cursor:pointer;white-space:nowrap;}",
+    ".rb:active,.chip:active,.go:active,.btn:active,.wide:active,.circ:active,.arow:active,.sbtn:active,.dchip:active,.abtn:active{transform:scale(.95);}",
+    ".wide{height:9.6vh;border-radius:4.8vh;padding:0 3.6vh;display:flex;align-items:center;justify-content:center;font-size:3.4vh;cursor:pointer;white-space:nowrap;}",
     ".wide.dismiss{background:linear-gradient(180deg,#ff6259,#e5362c);box-shadow:0 .8vh 2.4vh rgba(255,69,58,.35);}",
     ".wide.more,.wide.cancel{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.1);}",
     ".wide.apply{background:linear-gradient(180deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));color:var(--es-on-acc,#1a1000);}",
-    /* adjust mode */
     ".adj .delta{font-size:3.2vh;margin-top:1.2vh;padding:.6vh 2vh;border-radius:2.4vh;background:rgba(255,255,255,.08);}",
     ".adj .delta.up{background:rgba(52,199,89,.2);color:#7ff09a;}",
     ".adj .delta.down{background:rgba(255,69,58,.2);color:#ff8f87;}",
@@ -2863,62 +3180,154 @@
     ".atrack .lm{left:2.4vh;}.atrack .lp{right:2.4vh;}",
     ".ahint{font-size:2.5vh;opacity:.5;margin-top:1vh;}",
     ".awrap{width:100%;display:flex;flex-direction:column;align-items:center;}",
-    /* new-timer tile */
-    ".add .readout{font-size:7vh;font-weight:300;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap;}",
-    ".add .row{display:flex;align-items:center;gap:2.6vh;}",
-    ".slider{position:relative;width:var(--pillw,15vh);height:var(--pillh,40vh);border-radius:3.6vh;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);overflow:hidden;touch-action:none;cursor:ns-resize;}",
-    ".slider .fill{position:absolute;left:0;right:0;bottom:0;height:100%;background:linear-gradient(0deg,var(--es-acc2,#ff8a00),var(--es-hi2,#ffc15e));transform-origin:bottom;}",
-    ".slider ha-icon{position:absolute;left:50%;bottom:2vh;margin-left:-2.5vh;--mdc-icon-size:5vh;width:5vh;height:5vh;display:inline-flex;color:rgba(40,20,0,.7);pointer-events:none;}",
-    ".chips{display:grid;grid-template-columns:repeat(2,var(--chipw,13vh));gap:1.3vh;}",
-    ".chip{height:var(--chiph,8.8vh);border-radius:2.2vh;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;font-size:3.2vh;cursor:pointer;white-space:nowrap;}",
+    /* new timer: wheels + quick picks + start */
+    ".add{--ww:12.4vh;}",
+    ".chips{display:flex;flex-wrap:wrap;justify-content:center;gap:1.2vh;max-width:100%;}",
+    ".chip{height:6.4vh;min-width:10vh;padding:0 1.8vh;box-sizing:border-box;border-radius:3.2vh;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:center;font-size:2.7vh;cursor:pointer;white-space:nowrap;}",
     ".chip.sel{background:rgba(var(--es-acc-rgb,255,159,10),.2);border-color:rgba(var(--es-acc-rgb,255,159,10),.65);color:var(--es-hi2,#ffc266);}",
-    ".go{height:9vh;border-radius:4.5vh;background:linear-gradient(180deg,#3ad16a,#27a84f);box-shadow:0 .8vh 2.4vh rgba(39,168,79,.3);display:flex;align-items:center;justify-content:center;font-size:3.8vh;cursor:pointer;width:var(--gow,46vh);max-width:94%;}",
-    ".go ha-icon{--mdc-icon-size:4.4vh;width:4.4vh;height:4.4vh;display:inline-flex;margin-right:1.2vh;}",
+    ".go{height:9vh;border-radius:4.5vh;background:linear-gradient(180deg,#3ad16a,#27a84f);box-shadow:0 .8vh 2.4vh rgba(39,168,79,.3);display:flex;align-items:center;justify-content:center;font-size:3.6vh;cursor:pointer;width:var(--gow,46vh);max-width:94%;}",
+    ".go.off{opacity:.35;pointer-events:none;}",
+    ".go ha-icon{--mdc-icon-size:4.4vh;width:4.4vh;height:4.4vh;margin-right:1.2vh;}",
+    /* ===== stopwatch ===== */
+    ".p-sw{gap:3vh;}",
+    ".swl{flex:1.25 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6vh;}",
+    ".swd{font-size:17vh;font-weight:200;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.01em;white-space:nowrap;}",
+    ".swd.long{font-size:13.5vh;}",
+    ".swb{display:flex;justify-content:space-between;width:min(92%,66vh);}",
+    ".circ{width:17vh;height:17vh;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:3.4vh;cursor:pointer;box-sizing:border-box;" +
+      "box-shadow:0 0 0 .5vh rgba(0,0,0,.35),0 0 0 .8vh currentColor;}",
+    ".circ.grey{background:rgba(255,255,255,.16);color:rgba(255,255,255,.95);}",
+    ".circ.grey.off{opacity:.4;pointer-events:none;}",
+    ".circ.green{background:rgba(48,209,88,.24);color:#4cd964;}",
+    ".circ.red{background:rgba(255,69,58,.26);color:#ff6961;}",
+    ".swr{flex:1 1 0;min-width:0;display:flex;flex-direction:column;border-radius:3.6vh;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.025));border:1px solid rgba(255,255,255,.08);overflow:hidden;}",
+    ".swr .lh{flex:0 0 auto;padding:2.2vh 3vh 1.2vh;font-size:2.4vh;letter-spacing:.12em;text-transform:uppercase;opacity:.5;}",
+    ".laps{flex:1 1 auto;overflow-y:auto;padding:0 3vh 2vh;touch-action:pan-y;-webkit-overflow-scrolling:touch;}",
+    ".lap{display:flex;justify-content:space-between;align-items:center;height:7vh;border-top:1px solid rgba(255,255,255,.08);font-size:3.2vh;font-variant-numeric:tabular-nums;}",
+    ".lap:first-child{border-top:none;}",
+    ".lap.best{color:#4cd964;}.lap.worst{color:#ff6961;}",
+    ".lap .ln{opacity:.85;}",
+    ".lapnone{height:100%;display:flex;align-items:center;justify-content:center;font-size:2.8vh;opacity:.35;text-align:center;}",
+    /* ===== alarms ===== */
+    ".p-alarms{flex-direction:column;}",
+    ".anext{flex:0 0 auto;display:flex;align-items:center;gap:1.4vh;font-size:3vh;margin:0 .4vh 1.6vh;min-height:4vh;color:rgba(255,255,255,.75);}",
+    ".anext ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;color:var(--es-hi,#ffb340);}",
+    ".anext b{font-weight:500;color:#fff;}",
+    ".anext .off{margin-left:auto;display:flex;align-items:center;gap:.8vh;font-size:2.4vh;color:rgba(255,255,255,.5);}",
+    ".anext .off ha-icon{--mdc-icon-size:2.8vh;width:2.8vh;height:2.8vh;color:rgba(255,255,255,.5);}",
+    ".aring{flex:0 0 auto;display:none;align-items:center;gap:2vh;padding:2vh 2.6vh;margin-bottom:1.6vh;border-radius:3vh;background:linear-gradient(90deg,rgba(255,69,58,.35),rgba(255,69,58,.15));border:1px solid rgba(255,99,88,.6);}",
+    ".aring.on{display:flex;}",
+    ".aring .at{flex:1 1 auto;font-size:3.4vh;}",
+    ".aring ha-icon{--mdc-icon-size:5vh;width:5vh;height:5vh;animation:etc-blink 1s steps(1) infinite;}",
+    ".abtn{height:8vh;padding:0 3.4vh;border-radius:4vh;display:flex;align-items:center;font-size:3vh;cursor:pointer;background:rgba(255,255,255,.16);}",
+    ".abtn.stop{background:#fff;color:#c4271d;font-weight:500;}",
+    ".alist{flex:1 1 auto;min-height:0;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:min-content;gap:1.6vh;align-content:start;}",
+    ".alist.one{grid-template-columns:1fr;}",
+    ".arow{display:flex;align-items:center;gap:2vh;padding:2vh 2.8vh;border-radius:3vh;cursor:pointer;background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.09);}",
+    ".arow .ab{flex:1 1 auto;min-width:0;}",
+    ".arow .tm{font-size:9vh;font-weight:300;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}",
+    ".arow .tm small{font-size:3.4vh;font-weight:400;margin-left:.8vh;letter-spacing:0;}",
+    ".arow .lb{font-size:2.7vh;margin-top:.8vh;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    ".arow.off .tm,.arow.off .lb{opacity:.38;}",
+    ".arow.busy{opacity:.6;pointer-events:none;}",
+    ".sw{flex:0 0 auto;position:relative;width:11.6vh;height:7vh;border-radius:3.5vh;background:rgba(255,255,255,.18);transition:background .2s;cursor:pointer;}",
+    ".sw::after{content:'';position:absolute;top:.6vh;left:.6vh;width:5.8vh;height:5.8vh;border-radius:50%;background:#fff;box-shadow:0 .3vh .8vh rgba(0,0,0,.35);transition:transform .2s;}",
+    ".sw.on{background:#34c759;}",
+    ".sw.on::after{transform:translateX(4.6vh);}",
+    ".aempty{grid-column:1 / -1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.6vh;padding-top:9vh;text-align:center;font-size:3vh;color:rgba(255,255,255,.55);}",
+    ".aempty ha-icon{--mdc-icon-size:12vh;width:12vh;height:12vh;opacity:.4;}",
+    ".aempty b{font-size:4vh;font-weight:400;color:rgba(255,255,255,.85);}",
+    ".aempty .msg{max-width:80vh;line-height:1.35;}",
+    ".aempty .retry{margin-top:1vh;height:7vh;padding:0 3.4vh;border-radius:3.5vh;display:flex;align-items:center;background:rgba(255,255,255,.12);color:#fff;cursor:pointer;}",
+    ".afoot{flex:0 0 auto;margin-top:1.4vh;display:flex;align-items:center;justify-content:center;gap:1vh;font-size:2.3vh;color:rgba(255,255,255,.45);}",
+    ".afoot ha-icon{--mdc-icon-size:2.6vh;width:2.6vh;height:2.6vh;}",
+    /* alarm editor sheet */
+    ".sheet{position:absolute;left:0;top:0;right:0;bottom:0;z-index:30;display:flex;align-items:center;justify-content:center;background:rgba(3,6,14,.62);}",
+    ".sbox{width:90vw;max-height:92vh;box-sizing:border-box;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--es-pan1,#1c2540),var(--es-pan2,#141b30));border:1px solid rgba(255,255,255,.1);border-radius:3.4vh;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;}",
+    ".shd{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:2.4vh 2.8vh 1vh;}",
+    ".shd h2{margin:0;font-size:3.8vh;font-weight:500;}",
+    ".sbtn{font-size:3.2vh;padding:1.4vh 2.6vh;border-radius:3.2vh;cursor:pointer;color:var(--es-hi,#ffb340);justify-self:start;}",
+    ".sbtn.save{justify-self:end;background:linear-gradient(180deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));color:var(--es-on-acc,#1a1000);font-weight:500;padding:1.4vh 3.6vh;}",
+    ".sbtn.wait{opacity:.5;pointer-events:none;}",
+    ".sbody{display:flex;gap:4vh;padding:1vh 3.4vh 3vh;align-items:center;}",
+    ".sbody .wheels{flex:0 0 auto;--ww:14vh;--wrow:7.6vh;--wfs:5.4vh;padding:0 1vh;}",
+    ".sopts{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2.6vh;}",
+    ".olbl{font-size:2.3vh;letter-spacing:.1em;text-transform:uppercase;opacity:.55;margin-bottom:1.2vh;}",
+    ".days{display:flex;gap:1.1vh;}",
+    ".dchip{width:7.4vh;height:7.4vh;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:3vh;cursor:pointer;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);}",
+    ".dchip.on{background:var(--es-acc,#ff9f0a);border-color:transparent;color:var(--es-on-acc,#1a1000);font-weight:500;}",
+    ".qdays{display:flex;gap:1.1vh;margin-top:1.2vh;}",
+    ".qdays .chip{height:5.6vh;font-size:2.4vh;min-width:0;}",
+    ".lin{width:100%;box-sizing:border-box;height:8vh;border-radius:2vh;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.2);color:#fff;font:inherit;font-size:3.2vh;padding:0 2.2vh;outline:none;-webkit-user-select:text;user-select:text;}",
+    ".lin:focus{border-color:rgba(var(--es-acc-rgb,255,159,10),.7);}",
+    ".srow{display:flex;align-items:center;gap:2vh;}",
+    ".sdel{height:7.4vh;padding:0 3vh;border-radius:3.7vh;display:flex;align-items:center;gap:1vh;font-size:3vh;cursor:pointer;color:#ff6961;background:rgba(255,69,58,.12);}",
+    ".sdel ha-icon{--mdc-icon-size:3.4vh;width:3.4vh;height:3.4vh;}",
+    ".snote{font-size:2.3vh;line-height:1.35;opacity:.5;}",
+    ".serr{font-size:2.6vh;color:#ff8f87;min-height:3vh;}",
+    /* toast */
+    ".toast{position:absolute;left:50%;bottom:17vh;z-index:40;transform:translate(-50%,2vh);max-width:80vw;padding:2vh 3.2vh;border-radius:2.4vh;background:rgba(20,24,38,.96);border:1px solid rgba(255,255,255,.14);font-size:2.8vh;line-height:1.3;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;box-shadow:0 1vh 3vh rgba(0,0,0,.5);}",
+    ".toast.on{opacity:1;transform:translate(-50%,0);}",
     /* bottom buttons (same look as echo-weather-card) */
     ".btns{display:flex;gap:1.5vh;margin-top:2vh;height:9vh;flex:0 0 auto;}",
     ".btn{flex:1 1 0;border-radius:1.6vh;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;cursor:pointer;}",
     ".btn.active{background:rgba(255,255,255,.24);}",
-    ".btn ha-icon{--mdc-icon-size:5vh;width:5vh;height:5vh;display:inline-flex;color:rgba(255,255,255,.9);}",
+    ".btn ha-icon{--mdc-icon-size:5vh;width:5vh;height:5vh;color:rgba(255,255,255,.9);}",
   ].join("");
+
+  var TABS = [
+    { id: "alarms", icon: "mdi:alarm", label: "Alarms" },
+    { id: "stopwatch", icon: "mdi:timer-outline", label: "Stopwatch" },
+    { id: "timers", icon: "mdi:timer-sand", label: "Timers" },
+  ];
 
   // ---------- the card ----------
 
-  function EchoTimerCard() {
-    var self = Reflect.construct(HTMLElement, [], EchoTimerCard);
+  function initCard(self) {
     self._hass = null;
     self._config = null;
     self._sig = "";
     self._tick = null;
-    self._minIdx = STOPS.indexOf(5);
     self._pending = {};
-    self._adj = null;   // { slot, delta } while a timer is being adjusted
+    self._adj = null;                       // { slot, delta } while a timer is being adjusted
+    self._tw = { h: 0, m: 5, s: 0 };        // the new-timer wheels
+    self._sw = swLoad();
+    self._alarms = null;                    // last list from the kiosk
+    self._alarmBusy = {};
+    self._aq = Promise.resolve();
     // Keep touch gestures inside this card: stops the kiosk's swipe-between-views from
-    // firing while dragging sliders (and on this page generally).
+    // firing while spinning wheels and dragging sliders.
     ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
       self.addEventListener(type, function (ev) { if (!self._config || self._config.block_swipe !== false) ev.stopPropagation(); });
     });
+  }
+
+  function EchoClockCard() {
+    var self = Reflect.construct(HTMLElement, [], new.target || EchoClockCard);
+    initCard(self);
     return self;
   }
-  EchoTimerCard.prototype = Object.create(HTMLElement.prototype);
-  EchoTimerCard.prototype.constructor = EchoTimerCard;
-  Object.setPrototypeOf(EchoTimerCard, HTMLElement);
+  EchoClockCard.prototype = Object.create(HTMLElement.prototype);
+  EchoClockCard.prototype.constructor = EchoClockCard;
+  Object.setPrototypeOf(EchoClockCard, HTMLElement);
 
-  EchoTimerCard.prototype.setConfig = function (config) {
+  EchoClockCard.prototype.setConfig = function (config) {
     this._raw = config || {};
     this._applyProfile(null);
     var self = this;
     echoDisplayName().then(function (name) {
       self._display = name;
       var prof = matchDisplay(self._raw.devices, name);
-      if (!prof) return;
-      self._applyProfile(prof);
-      self._sig = "";
-      if (self._built && self._hass) self._update();
+      if (prof) {
+        self._applyProfile(prof);
+        self._sig = "";
+        if (self._built && self._hass) self._update();
+      }
+      if (self._built) self._alarmsShow();
     });
   };
 
-  // Build the effective config: card config plus the matching per-display overrides.
-  EchoTimerCard.prototype._applyProfile = function (prof) {
+  EchoClockCard.prototype._applyProfile = function (prof) {
     var config = {}, k;
     for (k in this._raw) config[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") config[k] = prof[k];
@@ -2935,54 +3344,77 @@
       cancel_script: config.cancel_script || "script.echo_timer_cancel",
       presets: config.presets || DEFAULT_PRESETS,
       buttons: config.buttons || [],
-      alarm: config.alarm !== false,                 // sound the alarm in this browser while a timer is done
+      alarm: config.alarm !== false,                 // sound the timer alarm in this browser
       tone_entity: config.tone_entity || "input_select.echo_timer_alarm_tone",
-      satellite: config.satellite || null,           // assist_satellite.*: alarm pauses while it listens/talks
-      idle_timeout: config.idle_timeout !== undefined ? config.idle_timeout : 180,  // seconds, 0 = off
-      idle_path: config.idle_path || null,           // where to go after idle_timeout (only when no timers)
-      settings: config.settings || {},               // options for the settings popup
-      block_swipe: config.block_swipe !== false,     // stop touch gestures leaving the card
-      tap_sound: !!config.tap_sound,                 // play a soft tick on button taps
+      satellite: config.satellite || null,           // assist_satellite.*: timer alarm pauses while it listens
+      idle_timeout: config.idle_timeout !== undefined ? config.idle_timeout : 180,
+      idle_path: config.idle_path || null,
+      settings: config.settings || {},
+      block_swipe: config.block_swipe !== false,
+      tap_sound: !!config.tap_sound,
+      tabs: config.tabs || ["alarms", "stopwatch", "timers"],
+      default_tab: config.default_tab || null,
+      alarms: config.alarms !== false,               // Kiosk Satellite alarms tab
+      kiosk: config.kiosk || null,                   // Kiosk Satellite device name (default: this display's)
+      alarm_script: config.alarm_script || null,     // script from Kiosk Satellite's alarms blueprint
+      time_format: config.time_format || null,       // "12" or "24" (default: HA profile)
     };
+    if (!this._config.alarms) this._config.tabs = this._config.tabs.filter(function (t) { return t !== "alarms"; });
   };
 
-  EchoTimerCard.prototype.getCardSize = function () { return 12; };
+  EchoClockCard.prototype.getCardSize = function () { return 12; };
 
-  Object.defineProperty(EchoTimerCard.prototype, "hass", {
+  Object.defineProperty(EchoClockCard.prototype, "hass", {
     set: function (hass) {
+      var first = !this._hass;
       this._hass = hass;
       if (!this._config) return;
       if (!this._built) { this._build(); this._startIdle(); }
       this._update();
+      this._alarmState();
+      if (first) { this._alarmsShow(); this._subscribeAlarmEvents(); }
       if (this._settingsEl) this._settingsEl.hass = hass;
     },
     get: function () { return this._hass; },
   });
 
-  EchoTimerCard.prototype.connectedCallback = function () {
-    if (this._built) this._update();
+  EchoClockCard.prototype.connectedCallback = function () {
+    this._sw = swLoad();                 // another page may have used it
+    if (this._built) {
+      this._pickTabOnShow();
+      this._update();
+      this._paintSw();
+      this._alarmsShow();
+    }
     this._startIdle();
+    this._subscribeAlarmEvents();
   };
 
-  EchoTimerCard.prototype.disconnectedCallback = function () {
+  EchoClockCard.prototype.disconnectedCallback = function () {
     this._stopTick();
     this._alarmStop();
     this._stopIdle();
+    this._swStopRaf();
+    this._closeSheet();
+    if (this._alarmUnsub) {
+      var u = this._alarmUnsub; this._alarmUnsub = null;
+      u.then(function (f) { if (f) { var r = f(); if (r && r.catch) r.catch(function () {}); } }, function () {});
+    }
     if (this._adj) { this._adj = null; this._sig = ""; }
     if (this._settingsEl) this._settingsEl.close();
   };
 
-  // ---------- alarm loop ----------
+  // ---------- timer alarm loop ----------
 
   var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
 
-  EchoTimerCard.prototype._voiceBusy = function () {
+  EchoClockCard.prototype._voiceBusy = function () {
     var sat = this._config.satellite && this._hass ? this._hass.states[this._config.satellite] : null;
     if (sat && VOICE_BUSY[sat.state]) return true;
     return !!(this._voiceHold && Date.now() < this._voiceHold);
   };
 
-  EchoTimerCard.prototype._alarmCycle = function () {
+  EchoClockCard.prototype._alarmCycle = function () {
     var self = this;
     if (!this._alarmOn) return;
     var tone = this._hass && this._hass.states[this._config.tone_entity] ? this._hass.states[this._config.tone_entity].state : "Chime";
@@ -2991,13 +3423,13 @@
     this._alarmTimer = setTimeout(function () { self._alarmCycle(); }, len * 1000);
   };
 
-  EchoTimerCard.prototype._alarmStart = function () {
+  EchoClockCard.prototype._alarmStart = function () {
     if (this._alarmOn || !this._config.alarm) return;
     this._alarmOn = true;
     this._alarmCycle();
   };
 
-  EchoTimerCard.prototype._alarmStop = function () {
+  EchoClockCard.prototype._alarmStop = function () {
     if (!this._alarmOn) return;
     this._alarmOn = false;
     if (this._alarmTimer) { clearTimeout(this._alarmTimer); this._alarmTimer = null; }
@@ -3005,16 +3437,16 @@
   };
 
   // ---------- go back to the home view after a period without touches ----------
-  // Only when no timer is running, paused or ringing.
+  // Not while a timer exists, the stopwatch runs or the alarm editor is open.
 
-  EchoTimerCard.prototype._touch = function () { this._lastAct = Date.now(); };
+  EchoClockCard.prototype._touch = function () { this._lastAct = Date.now(); };
 
-  EchoTimerCard.prototype._startIdle = function () {
+  EchoClockCard.prototype._startIdle = function () {
     var self = this;
     this._touch();
-    if (this._idleT || !this._config.idle_timeout || !this._config.idle_path) return;
+    if (this._idleT || !this._config || !this._config.idle_timeout || !this._config.idle_path) return;
     this._idleT = setInterval(function () {
-      var busy = (self._items && self._items.length) || self._settingsEl || self._adj;
+      var busy = (self._items && self._items.length) || self._settingsEl || self._adj || self._sheet || self._sw.start;
       if (busy) { self._touch(); return; }
       if (Date.now() - self._lastAct >= self._config.idle_timeout * 1000) {
         self._touch();
@@ -3023,104 +3455,613 @@
     }, 5000);
   };
 
-  EchoTimerCard.prototype._stopIdle = function () {
+  EchoClockCard.prototype._stopIdle = function () {
     if (this._idleT) { clearInterval(this._idleT); this._idleT = null; }
   };
 
   // ---------- DOM ----------
 
-  EchoTimerCard.prototype._build = function () {
-    var root = this.attachShadow({ mode: "open" });
-    var buttons = this._config.buttons;
+  EchoClockCard.prototype._build = function () {
+    var root = this.shadowRoot || this.attachShadow({ mode: "open" });
+    var cfg = this._config, buttons = cfg.buttons;
     var btnHtml = "";
     for (var i = 0; i < buttons.length; i++) {
       btnHtml += '<div class="btn' + (buttons[i].active ? " active" : "") + '" role="button" data-i="' + i + '"><ha-icon icon="' + esc(buttons[i].icon || "mdi:help") + '"></ha-icon></div>';
     }
+    var seg = "";
+    TABS.forEach(function (t) {
+      if (cfg.tabs.indexOf(t.id) === -1) return;
+      seg += '<div class="sg" role="button" data-tab="' + t.id + '"><ha-icon icon="' + t.icon + '"></ha-icon>' + t.label + '<span class="bdg"></span></div>';
+    });
     root.innerHTML = "<style>" + STYLE + "</style>" +
-      '<div class="root"><div class="content"><div class="main"></div>' +
+      '<div class="root"><div class="content">' +
+      '<div class="top">' + (cfg.tabs.length > 1 ? '<div class="seg">' + seg + "</div>" : "") +
+      '<div class="tb add-alarm" role="button"><ha-icon icon="mdi:plus"></ha-icon></div></div>' +
+      '<div class="pane p-alarms"><div class="anext"></div><div class="aring"></div><div class="alist"></div>' +
+      '<div class="afoot"><ha-icon icon="mdi:shield-check-outline"></ha-icon>Alarms ring from this display’s own clock, even when Home Assistant or Wi-Fi is down.</div></div>' +
+      '<div class="pane p-sw"><div class="swl"><div class="swd">00:00.00</div><div class="swb">' +
+      '<div class="circ grey" role="button" data-sw="left">Lap</div><div class="circ green" role="button" data-sw="right">Start</div></div></div>' +
+      '<div class="swr"><div class="lh">Laps</div><div class="laps"></div></div></div>' +
+      '<div class="pane p-timers"><div class="main"></div></div>' +
       (buttons.length ? '<div class="btns">' + btnHtml + "</div>" : "") +
-      "</div></div>";
+      '</div><div class="toast"></div></div>';
+    this._rootEl = root.querySelector(".root");
     this._mainEl = root.querySelector(".main");
+    this._toastEl = root.querySelector(".toast");
+    this._swD = root.querySelector(".swd");
+    this._lapsEl = root.querySelector(".laps");
+    this._aNext = root.querySelector(".anext");
+    this._aRing = root.querySelector(".aring");
+    this._aList = root.querySelector(".alist");
     var self = this;
 
-    // Any touch counts as activity for the idle return.
     root.addEventListener("pointerdown", function () { self._touch(); }, true);
-    // Optional tap feedback for anything button-like.
     root.addEventListener("click", function (ev) {
       if (self._config.tap_sound && ev.target.closest && ev.target.closest('[role="button"]')) Sound.tick();
     }, true);
 
+    // tabs
+    var segEl = root.querySelector(".seg");
+    if (segEl) segEl.addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest(".sg") : null;
+      if (t) self._setTab(t.getAttribute("data-tab"), true);
+    });
+    root.querySelector(".add-alarm").addEventListener("click", function () { self._openSheet(null); });
+
+    // stopwatch
+    root.querySelector(".swb").addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest("[data-sw]") : null;
+      if (t) self._swAction(t.getAttribute("data-sw"));
+    });
+
+    // alarms
+    this._aList.addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest("[data-a]") : null;
+      if (!t) return;
+      var act = t.getAttribute("data-a");
+      if (act === "retry") { self._alarmsLoad(true); return; }
+      var a = self._alarms && self._alarms[parseInt(t.getAttribute("data-k"), 10)];
+      if (!a) return;
+      if (act === "toggle") { ev.stopPropagation(); self._alarmToggle(a); }
+      else if (act === "edit") self._openSheet(a);
+    });
+    this._aRing.addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest("[data-press]") : null;
+      if (t && self._hass) self._hass.callService("button", "press", { entity_id: t.getAttribute("data-press") });
+    });
+
+    // timers
     this._mainEl.addEventListener("click", function (ev) {
       var t = ev.target.closest ? ev.target.closest("[data-act]") : null;
       if (!t) return;
       self._action(t.getAttribute("data-act"), parseInt(t.getAttribute("data-slot"), 10), t);
     });
-
-    // Drags: the new-timer pill (vertical) and the adjust track (horizontal).
     var drag = null;
-    function newIdx(clientY) {
-      var r = self._sliderEl.getBoundingClientRect();
-      var f = Math.max(0, Math.min(1, (r.bottom - clientY) / r.height));
-      return Math.min(STOPS.length - 1, Math.max(0, Math.round(f * (STOPS.length - 1))));
-    }
-    function down(x, y, target) {
-      if (!target.closest) return false;
-      if (target.closest(".slider") && self._sliderEl) { drag = "new"; self._setIdx(newIdx(y)); return true; }
-      var tr = target.closest(".atrack");
-      if (tr && self._adj) { drag = tr; self._adjFrom(tr, x); return true; }
-      return false;
-    }
-    function move(x, y) {
-      if (drag === "new") self._setIdx(newIdx(y));
-      else if (drag) self._adjFrom(drag, x);
-    }
-    function up() { drag = null; }
-    if (window.PointerEvent) {
-      this._mainEl.addEventListener("pointerdown", function (ev) {
-        if (down(ev.clientX, ev.clientY, ev.target)) {
-          try { ev.target.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
-          ev.preventDefault();
-        }
-      });
-      this._mainEl.addEventListener("pointermove", function (ev) { if (drag) move(ev.clientX, ev.clientY); });
-      this._mainEl.addEventListener("pointerup", up);
-      this._mainEl.addEventListener("pointercancel", up);
-    } else {
-      this._mainEl.addEventListener("touchstart", function (ev) { if (down(ev.touches[0].clientX, ev.touches[0].clientY, ev.target)) ev.preventDefault(); }, { passive: false });
-      this._mainEl.addEventListener("touchmove", function (ev) { if (drag) { move(ev.touches[0].clientX, ev.touches[0].clientY); ev.preventDefault(); } }, { passive: false });
-      this._mainEl.addEventListener("touchend", up);
-      this._mainEl.addEventListener("mousedown", function (ev) { down(ev.clientX, ev.clientY, ev.target); });
-      window.addEventListener("mousemove", function (ev) { if (drag) move(ev.clientX, ev.clientY); });
-      window.addEventListener("mouseup", up);
-    }
+    this._mainEl.addEventListener("pointerdown", function (ev) {
+      var tr = ev.target.closest ? ev.target.closest(".atrack") : null;
+      if (!tr || !self._adj) return;
+      drag = tr;
+      self._adjFrom(tr, ev.clientX);
+      try { tr.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      ev.preventDefault();
+    });
+    this._mainEl.addEventListener("pointermove", function (ev) { if (drag) self._adjFrom(drag, ev.clientX); });
+    this._mainEl.addEventListener("pointerup", function () { drag = null; });
+    this._mainEl.addEventListener("pointercancel", function () { drag = null; });
 
     var btnEls = root.querySelectorAll(".btn");
     for (var b = 0; b < btnEls.length; b++) {
       btnEls[b].addEventListener("click", function (ev) {
         var i = parseInt(ev.currentTarget.getAttribute("data-i"), 10);
-        var btn = buttons[i];
-        if (!btn) return;
-        if (btn.action === "settings" || btn.action === "timer-settings") {
-          var sc = {}, k;
-          for (k in (btn.settings || {})) sc[k] = btn.settings[k];
-          for (k in (self._config.settings || {})) sc[k] = self._config.settings[k];
-          sc.timers = self._config.slots.map(function (s) { return s.timer; });
-          // The shared settings panel (echo-show-common); the old timer-only popup otherwise.
-          if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { timers: sc.timers, alarm: sc });
-          else window.EchoAlarmSettingsOpen(self, root.querySelector(".root"), sc);
-        } else if (btn.navigation_path) {
-          navigate(btn.navigation_path);
-        } else if (btn.url) {
-          window.open(btn.url, "_self");
-        }
+        self._buttonTap(buttons[i]);
       });
     }
     this._built = true;
+    this._pickTabOnShow();
+    this._paintSw();
   };
 
-  // ---------- state ----------
+  EchoClockCard.prototype._buttonTap = function (btn) {
+    if (!btn) return;
+    var self = this;
+    if (btn.action === "settings" || btn.action === "timer-settings") {
+      var sc = {}, k;
+      for (k in (btn.settings || {})) sc[k] = btn.settings[k];
+      for (k in (self._config.settings || {})) sc[k] = self._config.settings[k];
+      sc.timers = self._config.slots.map(function (s) { return s.timer; });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { timers: sc.timers, alarm: sc });
+      else window.EchoAlarmSettingsOpen(self, self._rootEl, sc);
+    } else if (btn.navigation_path) {
+      navigate(btn.navigation_path);
+    } else if (btn.url) {
+      window.open(btn.url, "_self");
+    }
+  };
 
-  EchoTimerCard.prototype._slots = function () {
+  // ---------- tabs ----------
+
+  EchoClockCard.prototype._setTab = function (id, user) {
+    if (this._config.tabs.indexOf(id) === -1) id = this._config.tabs[this._config.tabs.length - 1];
+    if (user && window.EchoShow && window.EchoShow.prefs) window.EchoShow.prefs.set("clock_tab", id);
+    if (this._tab === id) return;
+    this._tab = id;
+    this._rootEl.setAttribute("data-tab", id);
+    var sgs = this.shadowRoot.querySelectorAll(".sg");
+    for (var i = 0; i < sgs.length; i++) {
+      var on = sgs[i].getAttribute("data-tab") === id;
+      if (on !== sgs[i].classList.contains("sel")) sgs[i].classList.toggle("sel");
+    }
+    if (id === "timers") { this._render(); }
+    if (id === "stopwatch") this._paintSw();
+    else this._swStopRaf();
+    if (id === "alarms") this._alarmsShow();
+  };
+
+  // Which tab a visit opens on: Timers when one is ringing or just started (by voice, say),
+  // otherwise the tab last used on this display.
+  EchoClockCard.prototype._pickTabOnShow = function () {
+    var items = this._hass ? this._slots() : [];
+    var now = Date.now(), want = null;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].state === "done") want = "timers";
+      if (items[i].state === "active" && items[i].duration && now - (items[i].finishes - items[i].duration * 1000) < 15000) want = "timers";
+    }
+    if (!want) {
+      var p = window.EchoShow && window.EchoShow.prefs ? window.EchoShow.prefs.get("clock_tab") : null;
+      want = p || this._config.default_tab || (items.length ? "timers" : this._config.tabs[0]);
+    }
+    this._tab = null;
+    this._setTab(want, false);
+  };
+
+  EchoClockCard.prototype._badges = function () {
+    var sgs = this.shadowRoot ? this.shadowRoot.querySelectorAll(".sg .bdg") : [];
+    for (var i = 0; i < sgs.length; i++) {
+      var id = sgs[i].parentNode.getAttribute("data-tab"), on = false, red = false;
+      if (id === "timers") {
+        (this._items || []).forEach(function (it) { on = true; if (it.state === "done") red = true; });
+      } else if (id === "stopwatch") on = !!this._sw.start;
+      else if (id === "alarms") { on = !!this._ringing; red = !!this._ringing; }
+      if (on !== sgs[i].classList.contains("on")) sgs[i].classList.toggle("on");
+      if (red !== sgs[i].classList.contains("red")) sgs[i].classList.toggle("red");
+    }
+  };
+
+  EchoClockCard.prototype._toast = function (msg) {
+    var el = this._toastEl;
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add("on");
+    if (this._toastT) clearTimeout(this._toastT);
+    this._toastT = setTimeout(function () { el.classList.remove("on"); }, 4200);
+  };
+
+  EchoClockCard.prototype._h24 = function () {
+    if (this._config.time_format) return String(this._config.time_format) === "24";
+    var loc = this._hass && this._hass.locale;
+    if (loc && loc.time_format === "24") return true;
+    if (loc && loc.time_format === "12") return false;
+    try {
+      return !/[ap]m/i.test(new Date(2020, 0, 1, 15).toLocaleTimeString((loc && loc.language) || undefined));
+    } catch (e) { return false; }
+  };
+
+  // ---------- stopwatch ----------
+
+  EchoClockCard.prototype._swAction = function (which) {
+    var s = this._sw, now = Date.now();
+    if (which === "right") {
+      if (s.start) { s.acc += now - s.start; s.start = null; }
+      else s.start = now;
+    } else if (s.start) {
+      var sum = 0;
+      s.laps.forEach(function (l) { sum += l; });
+      s.laps.push(swElapsed(s) - sum);
+    } else if (s.acc > 0) {
+      s.acc = 0; s.laps = [];
+    }
+    swSave(s);
+    this._paintSw();
+    this._badges();
+  };
+
+  EchoClockCard.prototype._swStopRaf = function () {
+    if (this._swRaf) { cancelAnimationFrame(this._swRaf); this._swRaf = null; }
+  };
+
+  EchoClockCard.prototype._paintSw = function () {
+    if (!this._built) return;
+    var s = this._sw, self = this;
+    var left = this.shadowRoot.querySelector('[data-sw="left"]'), right = this.shadowRoot.querySelector('[data-sw="right"]');
+    var el = swElapsed(s);
+    left.textContent = s.start || !el ? "Lap" : "Reset";
+    left.className = "circ grey" + (!s.start && !el ? " off" : "");
+    right.textContent = s.start ? "Stop" : "Start";
+    right.className = "circ " + (s.start ? "red" : "green");
+    // laps: the running lap on top, then the finished ones newest first
+    var sum = 0, best = -1, worst = -1, h = "";
+    s.laps.forEach(function (l, i) {
+      sum += l;
+      if (best < 0 || l < s.laps[best]) best = i;
+      if (worst < 0 || l > s.laps[worst]) worst = i;
+    });
+    if (el > 0) h += '<div class="lap cur"><span class="ln">Lap ' + (s.laps.length + 1) + '</span><span class="lt"></span></div>';
+    for (var i = s.laps.length - 1; i >= 0; i--) {
+      var cls = s.laps.length > 1 ? (i === best ? " best" : i === worst ? " worst" : "") : "";
+      h += '<div class="lap' + cls + '"><span class="ln">Lap ' + (i + 1) + "</span><span>" + fmtSw(s.laps[i]) + "</span></div>";
+    }
+    if (!h) h = '<div class="lapnone">Tap Start, then Lap to<br>split the time</div>';
+    this._lapsEl.innerHTML = h;
+    this._swCurLap = this._lapsEl.querySelector(".lap.cur .lt");
+    this._swSum = sum;
+    function frame() {
+      var e = swElapsed(self._sw);
+      var t = fmtSw(e);
+      if (self._swD.textContent !== t) {
+        self._swD.textContent = t;
+        var long = t.length > 8;
+        if (long !== self._swD.classList.contains("long")) self._swD.classList.toggle("long");
+      }
+      if (self._swCurLap) self._swCurLap.textContent = fmtSw(e - self._swSum);
+      self._swRaf = self._sw.start && self._tab === "stopwatch" ? requestAnimationFrame(frame) : null;
+    }
+    this._swStopRaf();
+    frame();
+  };
+
+  // ---------- alarms (Kiosk Satellite) ----------
+
+  EchoClockCard.prototype._kiosk = function () {
+    return this._config.kiosk || this._display || "";
+  };
+
+  EchoClockCard.prototype._alarmScript = function () {
+    var h = this._hass;
+    if (this._config.alarm_script) return this._config.alarm_script;
+    if (h && h.user && h.user.is_admin === false && h.states["script.kiosk_satellite_alarms"]) return "script.kiosk_satellite_alarms";
+    return null;
+  };
+
+  EchoClockCard.prototype._cacheKey = function () { return "echo-clock-alarms:" + this._kiosk().toLowerCase(); };
+
+  // One request at a time, like the kiosk itself handles them.
+  EchoClockCard.prototype._req = function (data) {
+    var self = this;
+    var p = this._aq.then(function () {
+      if (!self._hass || !self._hass.connection) return { ok: false, error: "offline" };
+      return alarmRequest(self._hass, self._kiosk(), data, self._alarmScript());
+    });
+    this._aq = p.then(function () {}, function () {});
+    return p;
+  };
+
+  EchoClockCard.prototype._errText = function (r) {
+    var e = (r && r.error) || "";
+    if (e === "offline") return "Home Assistant isn’t connected. Alarms still ring; changes need a connection.";
+    if (e === "timeout" || /No kiosk answered/i.test(e)) {
+      return "“" + this._kiosk() + "” didn’t answer. In Kiosk Satellite, Settings › Home Assistant needs a token from an administrator user, and the name must match this display.";
+    }
+    if (r && r.refused) return "This dashboard’s user can’t send alarm requests. Use an administrator, or create a script from Kiosk Satellite’s alarms blueprint and set alarm_script on the card.";
+    if (e === "duplicate") return "There’s already an alarm at that time on those days.";
+    if (/several alarms match/i.test(e)) return "More than one alarm has that time. Give them different labels, or change it in the display’s own alarm list.";
+    if (/no matching alarm/i.test(e)) return "That alarm is gone already.";
+    return e || "Something went wrong.";
+  };
+
+  // Show what we know right away (cached), then ask the kiosk.
+  EchoClockCard.prototype._alarmsShow = function () {
+    if (!this._built || !this._config.alarms || this._tab !== "alarms") return;
+    if (this._alarms === null) {
+      try {
+        var c = JSON.parse(window.localStorage.getItem(this._cacheKey()) || "null");
+        if (c && c.alarms) { this._alarms = c.alarms; this._alarmsStale = true; }
+      } catch (e) { /* ignore */ }
+    }
+    this._paintAlarms();
+    if (!this._lastLoad || Date.now() - this._lastLoad > 20000) this._alarmsLoad(false);
+    var self = this;
+    if (!this._nextT) this._nextT = setInterval(function () {
+      if (!self.isConnected) { clearInterval(self._nextT); self._nextT = null; return; }
+      if (self._tab === "alarms") self._paintNext();
+    }, 30000);
+  };
+
+  EchoClockCard.prototype._alarmsLoad = function (force) {
+    var self = this;
+    if (!this._kiosk() || !this._hass) { this._paintAlarms(); return; }
+    if (this._loading && !force) return;
+    this._loading = true;
+    this._lastLoad = Date.now();
+    if (force) { this._alarmErr = null; this._paintAlarms(); }
+    this._req({ action: "list" }).then(function (r) {
+      self._loading = false;
+      if (r && r.ok && r.alarms) {
+        self._alarms = r.alarms.slice().sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+        self._alarmsStale = false;
+        self._alarmErr = null;
+        try { window.localStorage.setItem(self._cacheKey(), JSON.stringify({ at: Date.now(), alarms: self._alarms })); } catch (e) { /* ignore */ }
+      } else {
+        self._alarmErr = self._errText(r);
+        self._alarmsStale = true;
+      }
+      self._paintAlarms();
+    });
+  };
+
+  // Any change from voice, the kiosk screen or the remote admin shows up here too.
+  EchoClockCard.prototype._subscribeAlarmEvents = function () {
+    var self = this, h = this._hass;
+    if (this._alarmUnsub || !h || !h.connection || !this._config || !this._config.alarms) return;
+    if (h.user && h.user.is_admin === false) return;   // HA only lets admins follow custom events
+    this._alarmUnsub = h.connection.subscribeEvents(function () {
+      if (self._evT) clearTimeout(self._evT);
+      self._evT = setTimeout(function () { if (!self._sheet) self._alarmsLoad(true); else self._lastLoad = 0; }, 600);
+    }, "esphome.kiosk_satellite_alarm");
+    if (this._alarmUnsub && this._alarmUnsub.catch) this._alarmUnsub.catch(function () { self._alarmUnsub = null; });
+  };
+
+  EchoClockCard.prototype._fmtTime = function (hhmm, html) {
+    var m = /^(\d{1,2}):(\d{2})/.exec(hhmm || "");
+    if (!m) return esc(hhmm);
+    var h = parseInt(m[1], 10);
+    if (this._h24()) return (h < 10 ? "0" : "") + h + ":" + m[2];
+    var ap = h >= 12 ? "PM" : "AM";
+    h = h % 12; if (h === 0) h = 12;
+    return h + ":" + m[2] + (html ? "<small>" + ap + "</small>" : " " + ap);
+  };
+
+  EchoClockCard.prototype._paintNext = function () {
+    var el = this._aNext, list = this._alarms || [], best = 0, bestA = null;
+    list.forEach(function (a) {
+      if (!a.on) return;
+      var t = parseNextRing(a.next_ring);
+      if (t && (!best || t < best)) { best = t; bestA = a; }
+    });
+    var h = "";
+    if (bestA && best > Date.now() - 60000) {
+      h = '<ha-icon icon="mdi:alarm"></ha-icon><span>Next alarm <b>' + dayWord(best) + " " + this._fmtTime(bestA.time) + "</b> · " + fmtIn(best - Date.now()) + "</span>";
+    } else if (list.length) {
+      h = '<ha-icon icon="mdi:alarm-off"></ha-icon><span>No alarms on</span>';
+    }
+    if (this._alarmsStale && list.length) h += '<span class="off"><ha-icon icon="mdi:cloud-off-outline"></ha-icon>Last known list</span>';
+    else if (this._loading) h += '<span class="off">Updating…</span>';
+    if (el.getAttribute("data-h") !== h) { el.innerHTML = h; el.setAttribute("data-h", h); }
+  };
+
+  EchoClockCard.prototype._paintAlarms = function () {
+    if (!this._built) return;
+    var list = this._alarms, h = "", self = this;
+    if (!this._kiosk()) {
+      h = '<div class="aempty"><ha-icon icon="mdi:tablet"></ha-icon><b>Not on a Kiosk Satellite display</b>' +
+        '<div class="msg">Alarms live on the tablet. Open this page on the Echo Show, or set <b>kiosk:</b> on the card to the Kiosk Satellite device name.</div></div>';
+    } else if (list === null) {
+      h = this._alarmErr
+        ? '<div class="aempty"><ha-icon icon="mdi:alarm-note-off"></ha-icon><b>Can’t reach the alarms</b><div class="msg">' + esc(this._alarmErr) + '</div><div class="retry" role="button" data-a="retry">Try again</div></div>'
+        : '<div class="aempty"><ha-icon icon="mdi:alarm"></ha-icon><div class="msg">Loading alarms…</div></div>';
+    } else if (!list.length) {
+      h = '<div class="aempty"><ha-icon icon="mdi:alarm-plus"></ha-icon><b>No alarms</b><div class="msg">Tap + to set one.</div>' +
+        (this._alarmErr ? '<div class="msg">' + esc(this._alarmErr) + '</div><div class="retry" role="button" data-a="retry">Try again</div>' : "") + "</div>";
+    } else {
+      list.forEach(function (a, k) {
+        var d = daysText(daysOf(a));
+        var lb = (a.label || "Alarm") + (d ? ", " + d : "");
+        h += '<div class="arow' + (a.on ? "" : " off") + (self._alarmBusy[a.time + "|" + (a.label || "")] ? " busy" : "") + '" role="button" data-a="edit" data-k="' + k + '">' +
+          '<div class="ab"><div class="tm">' + self._fmtTime(a.time, true) + '</div><div class="lb">' + esc(lb) + "</div></div>" +
+          '<div class="sw' + (a.on ? " on" : "") + '" role="switch" data-a="toggle" data-k="' + k + '"></div></div>';
+      });
+    }
+    this._aList.className = "alist" + (!list || list.length < 3 ? " one" : "");
+    this._aList.innerHTML = h;
+    this._paintNext();
+    this._badges();
+  };
+
+  // Ringing / snoozed, from the kiosk's ESPHome entities.
+  EchoClockCard.prototype._alarmState = function () {
+    var self = this, h = this._hass, ES = window.EchoShow;
+    if (!h || !this._built || !ES || !ES.deviceSlug) return;
+    if (this._devSlug === undefined) {
+      this._devSlug = null;
+      ES.deviceSlug(h).then(function (s) { self._devSlug = s || null; self._alarmState(); });
+      return;
+    }
+    var slug = this._devSlug, ring = null, snooze = null, stopB = null, snoozeB = null;
+    if (slug) {
+      ring = h.states[ES.devEnt(h, slug, "binary_sensor", "alarm_ringing")];
+      snooze = h.states[ES.devEnt(h, slug, "sensor", "alarm_snoozed_until")];
+      stopB = ES.devEnt(h, slug, "button", "stop_alarm");
+      snoozeB = ES.devEnt(h, slug, "button", "snooze_alarm");
+    }
+    var ringing = !!(ring && ring.state === "on");
+    var snoozedTs = snooze && snooze.state && !/unknown|unavailable/.test(snooze.state) ? Date.parse(snooze.state) : 0;
+    var html = "";
+    if (ringing) {
+      html = '<ha-icon icon="mdi:alarm-bell"></ha-icon><div class="at">Alarm ringing</div>' +
+        (snoozeB ? '<div class="abtn" role="button" data-press="' + esc(snoozeB) + '">Snooze</div>' : "") +
+        (stopB ? '<div class="abtn stop" role="button" data-press="' + esc(stopB) + '">Stop</div>' : "");
+    } else if (snoozedTs > Date.now()) {
+      html = '<ha-icon icon="mdi:alarm-snooze"></ha-icon><div class="at">Snoozed until ' + this._fmtTime(fmtHM(snoozedTs)) + "</div>" +
+        (stopB ? '<div class="abtn stop" role="button" data-press="' + esc(stopB) + '">Stop</div>' : "");
+    }
+    if (this._aRing.getAttribute("data-h") !== html) {
+      this._aRing.innerHTML = html;
+      this._aRing.setAttribute("data-h", html);
+      this._aRing.className = "aring" + (html ? " on" : "");
+    }
+    if (ringing !== !!this._ringing) {
+      this._ringing = ringing;
+      if (!ringing && this._wasRinging) this._lastLoad = 0;   // a one-time alarm turned itself off
+      this._wasRinging = ringing;
+      this._badges();
+    }
+  };
+
+  function fmtHM(ts) {
+    var d = new Date(ts);
+    return (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
+  }
+
+  EchoClockCard.prototype._alarmToggle = function (a) {
+    var self = this, key = a.time + "|" + (a.label || "");
+    if (this._alarmBusy[key]) return;
+    this._alarmBusy[key] = true;
+    var was = a.on;
+    a.on = !was;                      // show it at once
+    this._paintAlarms();
+    this._req({ action: was ? "turn_off" : "turn_on", time: a.time, label: a.label || "" }).then(function (r) {
+      delete self._alarmBusy[key];
+      if (r && r.ok) {
+        if (r.alarm) for (var k in r.alarm) a[k] = r.alarm[k];
+        if (!r.alarm || r.alarm.next_ring === undefined) delete a.next_ring;
+        if (a.on && a.next_ring) self._toast("Alarm set for " + dayWord(parseNextRing(a.next_ring)).toLowerCase() + " " + self._fmtTime(a.time) + ", " + fmtIn(parseNextRing(a.next_ring) - Date.now()) + ".");
+      } else {
+        a.on = was;
+        self._toast(self._errText(r));
+      }
+      self._paintAlarms();
+      self._alarmsLoad(true);
+    });
+  };
+
+  // ----- alarm editor sheet -----
+
+  EchoClockCard.prototype._openSheet = function (a) {
+    if (this._sheet) return;
+    if (!this._kiosk()) { this._toast("This isn’t a Kiosk Satellite display."); return; }
+    var self = this, h24 = this._h24();
+    var hh = 7, mm = 0;
+    if (a) {
+      var m = /^(\d{1,2}):(\d{2})/.exec(a.time || "");
+      if (m) { hh = parseInt(m[1], 10); mm = parseInt(m[2], 10); }
+    }
+    var st = { days: daysOf(a).slice(), label: a ? a.label || "" : "" };
+    var sh = document.createElement("div");
+    sh.className = "sheet";
+    var dchips = "";
+    for (var i = 1; i <= 7; i++) {
+      var d = DAY_KEYS[i % 7];   // Monday first
+      dchips += '<div class="dchip" role="button" data-day="' + d + '">' + DAY_LETTER[i % 7] + "</div>";
+    }
+    sh.innerHTML = '<div class="sbox"><div class="shd"><div class="sbtn" role="button" data-s="cancel">Cancel</div>' +
+      "<h2>" + (a ? "Edit Alarm" : "Add Alarm") + '</h2><div class="sbtn save" role="button" data-s="save">Save</div></div>' +
+      '<div class="sbody"><div class="wheels"></div><div class="sopts">' +
+      '<div><div class="olbl">Repeat</div><div class="days">' + dchips + '</div>' +
+      '<div class="qdays"><div class="chip" role="button" data-q="once">Once</div><div class="chip" role="button" data-q="wk">Weekdays</div>' +
+      '<div class="chip" role="button" data-q="we">Weekends</div><div class="chip" role="button" data-q="all">Every day</div></div></div>' +
+      '<div><div class="olbl">Label</div><input class="lin" maxlength="40" placeholder="Alarm" value="' + esc(st.label) + '"></div>' +
+      '<div class="serr"></div>' +
+      '<div class="srow">' + (a ? '<div class="sdel" role="button" data-s="delete"><ha-icon icon="mdi:delete-outline"></ha-icon>Delete</div>' : "") +
+      '<div class="snote">Sound, volume, snooze and sunrise follow the display’s Alarm settings in Kiosk Satellite.</div></div>' +
+      "</div></div></div>";
+    this._rootEl.appendChild(sh);
+    this._sheet = sh;
+
+    // wheels: hour, minute (and AM/PM)
+    var wh = sh.querySelector(".wheels");
+    var hourW, minW, apW = null;
+    if (h24) {
+      hourW = new Wheel({ values: range(0, 23, true), index: hh });
+    } else {
+      hourW = new Wheel({ values: range(1, 12), index: ((hh + 11) % 12) });
+      apW = new Wheel({ values: ["AM", "PM"], index: hh >= 12 ? 1 : 0, loop: false, cls: "ampm" });
+    }
+    minW = new Wheel({ values: range(0, 59, true), index: mm });
+    wh.appendChild(hourW.el);
+    wh.appendChild(minW.el);
+    if (apW) wh.appendChild(apW.el);
+    var wheels = [hourW, minW].concat(apW ? [apW] : []);
+    requestAnimationFrame(function () { wheels.forEach(function (w) { w.paint(); }); });
+
+    var input = sh.querySelector(".lin"), err = sh.querySelector(".serr");
+    // HA's keyboard shortcuts must not eat the typing.
+    ["keydown", "keyup", "keypress"].forEach(function (t) { input.addEventListener(t, function (ev) { ev.stopPropagation(); }); });
+    input.addEventListener("pointerdown", function (ev) { ev.stopPropagation(); });
+
+    function paintDays() {
+      var set = {};
+      st.days.forEach(function (d) { set[d] = 1; });
+      var ds = sh.querySelectorAll(".dchip");
+      for (var i = 0; i < ds.length; i++) {
+        var on = !!set[ds[i].getAttribute("data-day")];
+        if (on !== ds[i].classList.contains("on")) ds[i].classList.toggle("on");
+      }
+      var q = !st.days.length ? "once" : daysText(st.days) === "Weekdays" ? "wk" : daysText(st.days) === "Weekends" ? "we" : st.days.length === 7 ? "all" : "";
+      var qs = sh.querySelectorAll(".qdays .chip");
+      for (var j = 0; j < qs.length; j++) {
+        var sel = qs[j].getAttribute("data-q") === q;
+        if (sel !== qs[j].classList.contains("sel")) qs[j].classList.toggle("sel");
+      }
+    }
+    paintDays();
+
+    function timeStr() {
+      var hr = hourW.value(), mn = minW.value();
+      if (!h24) hr = (hr + 1) % 12 + (apW.value() === 1 ? 12 : 0);
+      return (hr < 10 ? "0" : "") + hr + ":" + (mn < 10 ? "0" : "") + mn;
+    }
+    function busy(on) {
+      var bs = sh.querySelectorAll(".sbtn.save,.sdel");
+      for (var i = 0; i < bs.length; i++) if (on !== bs[i].classList.contains("wait")) bs[i].classList.toggle("wait");
+    }
+
+    sh.addEventListener("click", function (ev) {
+      var t = ev.target.closest ? ev.target.closest("[data-s],[data-day],[data-q]") : null;
+      if (!t) { if (ev.target === sh) self._closeSheet(); return; }
+      if (t.hasAttribute("data-day")) {
+        var dd = t.getAttribute("data-day"), ix = st.days.indexOf(dd);
+        if (ix === -1) st.days.push(dd); else st.days.splice(ix, 1);
+        st.days = DAY_KEYS.filter(function (k) { return st.days.indexOf(k) !== -1; });
+        paintDays();
+        return;
+      }
+      if (t.hasAttribute("data-q")) {
+        var q = t.getAttribute("data-q");
+        st.days = q === "once" ? [] : q === "wk" ? ["mon", "tue", "wed", "thu", "fri"] : q === "we" ? ["sat", "sun"] : DAY_KEYS.slice();
+        st.days = DAY_KEYS.filter(function (k) { return st.days.indexOf(k) !== -1; });
+        paintDays();
+        return;
+      }
+      var s = t.getAttribute("data-s");
+      if (s === "cancel") { self._closeSheet(); return; }
+      err.textContent = "";
+      busy(true);
+      var label = input.value.replace(/\s+/g, " ").trim();
+      var time = timeStr();
+      var steps = [];
+      if (a && (s === "delete" || time !== a.time || label !== (a.label || "") || daysText(st.days) !== daysText(daysOf(a)))) {
+        // No edit on the kiosk side: an edit is delete + set (as Kiosk Satellite's own docs suggest).
+        steps.push({ action: "delete", time: a.time, label: a.label || "" });
+      }
+      if (s === "save" && (!a || steps.length || !a.on)) steps.push({ action: "set", time: time, days: st.days, label: label });
+      var last = null, chain = Promise.resolve({ ok: true });
+      steps.forEach(function (stp) {
+        chain = chain.then(function (r) {
+          if (r && r.ok === false) return r;
+          return self._req(stp).then(function (rr) { last = rr; return rr; });
+        });
+      });
+      chain.then(function (r) {
+        busy(false);
+        if (r && r.ok === false) { err.textContent = self._errText(r); self._alarmsLoad(true); return; }
+        self._closeSheet();
+        if (s === "save" && last && last.alarm && last.alarm.next_ring) {
+          var t2 = parseNextRing(last.alarm.next_ring);
+          self._toast("Alarm set for " + dayWord(t2).toLowerCase() + " " + self._fmtTime(time) + ", " + fmtIn(t2 - Date.now()) + ".");
+        } else if (s === "delete") self._toast("Alarm deleted.");
+        self._alarmsLoad(true);
+      });
+    });
+  };
+
+  EchoClockCard.prototype._closeSheet = function () {
+    if (!this._sheet) return;
+    if (this._sheet.parentNode) this._sheet.parentNode.removeChild(this._sheet);
+    this._sheet = null;
+  };
+
+  // ---------- timers (HA timer helpers) ----------
+
+  EchoClockCard.prototype._slots = function () {
     var out = [];
     var st = this._hass.states;
     for (var i = 0; i < this._config.slots.length; i++) {
@@ -3145,35 +4086,37 @@
     return out;
   };
 
-  EchoTimerCard.prototype._item = function (slot) {
+  EchoClockCard.prototype._item = function (slot) {
     var items = this._items || [];
     for (var i = 0; i < items.length; i++) if (items[i].slot === slot) return items[i];
     return null;
   };
 
-  EchoTimerCard.prototype._left = function (it) {
+  EchoClockCard.prototype._left = function (it) {
     if (!it) return 0;
     if (it.state === "active") return Math.max(0, (it.finishes - Date.now()) / 1000);
     if (it.state === "paused") return it.remaining;
     return 0;
   };
 
-  EchoTimerCard.prototype._update = function () {
+  EchoClockCard.prototype._update = function () {
     if (!this._hass) return;
     var slots = this._slots();
     var sig = JSON.stringify(slots);
     if (sig !== this._sig) {
-      if (this._sig) this._touch(); // a timer was added/changed: counts as activity
+      var wasDone = (this._items || []).some(function (x) { return x.state === "done"; });
+      if (this._sig) this._touch();
       this._sig = sig;
       this._items = slots;
-      // Leave adjust mode if that timer finished or went away.
       if (this._adj) {
         var a = this._item(this._adj.slot);
         if (!a || a.state === "done") this._adj = null;
       }
-      this._render();
+      var nowDone = slots.some(function (x) { return x.state === "done"; });
+      if (nowDone && !wasDone && this._tab !== "timers" && !this._sheet) this._setTab("timers", false);
+      else this._render();
+      this._badges();
     }
-    // Pause the alarm while the voice assistant is listening or answering (and briefly after).
     var sat = this._config.satellite ? this._hass.states[this._config.satellite] : null;
     if (sat && VOICE_BUSY[sat.state]) {
       if (this._alarmOn) Sound.hush();
@@ -3188,64 +4131,56 @@
     if (ringing) this._alarmStart(); else this._alarmStop();
   };
 
-  EchoTimerCard.prototype._startTick = function () {
+  EchoClockCard.prototype._startTick = function () {
     if (this._tick) return;
     var self = this;
     this._tick = setInterval(function () { self._paintTimes(); }, 1000);
   };
 
-  EchoTimerCard.prototype._stopTick = function () {
+  EchoClockCard.prototype._stopTick = function () {
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
   };
 
-  // ---------- render ----------
-
-  EchoTimerCard.prototype._render = function () {
+  EchoClockCard.prototype._render = function () {
+    if (!this._built || this._tab !== "timers") return;
+    if (this._wheelBusy()) { this._renderLater = true; return; }
     var items = this._items || [];
     var canAdd = items.length < this._config.slots.length;
     if (!canAdd || !items.length) this._adding = false;
-    // The new-timer setter shows when there are no timers, or after "+" is tapped.
     var showAdd = canAdd && (!items.length || this._adding);
     var cols = items.length + (showAdd ? 1 : 0);
     var host = this.shadowRoot.host;
     this._mainEl.className = "main" + (cols <= 1 ? " solo" : "");
-    // Sizes scale with the number of columns.
-    host.style.setProperty("--ring", (cols <= 1 ? (items.length ? 54 : 42) : cols === 2 ? 40 : 34) + "vh");
-    host.style.setProperty("--clock", (cols >= 3 ? 8 : cols === 2 ? 9.5 : 12) + "vh");
-    if (cols <= 1) {
-      host.style.setProperty("--pillw", "16vh"); host.style.setProperty("--pillh", "42vh");
-      host.style.setProperty("--chipw", "17vh"); host.style.setProperty("--chiph", "9.4vh");
-      host.style.setProperty("--gow", "56vh");
-    } else if (cols === 2) {
-      host.style.setProperty("--pillw", "14vh"); host.style.setProperty("--pillh", "40vh");
-      host.style.setProperty("--chipw", "14vh"); host.style.setProperty("--chiph", "9vh");
-      host.style.setProperty("--gow", "46vh");
-    } else {
-      host.style.setProperty("--pillw", "11vh"); host.style.setProperty("--pillh", "38vh");
-      host.style.setProperty("--chipw", "12.5vh"); host.style.setProperty("--chiph", "8.4vh");
-      host.style.setProperty("--gow", "40vh");
-    }
+    host.style.setProperty("--ring", (cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
+    host.style.setProperty("--clock", (cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
+    host.style.setProperty("--gow", (cols <= 1 ? 52 : cols === 2 ? 44 : 36) + "vh");
+    host.style.setProperty("--ww", (cols <= 1 ? 15 : cols === 2 ? 13 : 11) + "vh");
+    host.style.setProperty("--wrow", (cols <= 1 ? 7 : 6.4) + "vh");
+    host.style.setProperty("--wfs", (cols <= 1 ? 5 : cols === 2 ? 4.4 : 3.8) + "vh");
 
     var h = "";
     for (var i = 0; i < items.length; i++) {
       h += (this._adj && this._adj.slot === items[i].slot) ? this._adjustHtml(items[i]) : this._timerHtml(items[i]);
     }
-    if (showAdd) h += this._adderHtml(items.length);
+    if (showAdd) h += this._adderHtml(items.length, cols);
     if (canAdd && items.length && !showAdd) {
       h += '<div class="corner plus" role="button" data-act="add-open"><ha-icon icon="mdi:plus"></ha-icon></div>';
     } else if (showAdd && items.length) {
       h += '<div class="corner" role="button" data-act="add-close"><ha-icon icon="mdi:close"></ha-icon></div>';
     }
     this._mainEl.innerHTML = h;
-    this._sliderEl = this._mainEl.querySelector(".slider");
-    this._fillEl = this._mainEl.querySelector(".slider .fill");
-    this._readEl = this._mainEl.querySelector(".add .readout");
-    this._paintSlider();
+    this._mountTimerWheels();
     this._paintAdjust();
     this._paintTimes();
   };
 
-  EchoTimerCard.prototype._timerHtml = function (it) {
+  EchoClockCard.prototype._wheelBusy = function () {
+    var w = this._twWheels || [];
+    for (var i = 0; i < w.length; i++) if (w[i].dragging || w[i]._raf) return true;
+    return false;
+  };
+
+  EchoClockCard.prototype._timerHtml = function (it) {
     var ctl;
     if (it.state === "done") {
       ctl = '<div class="ctl">' +
@@ -3272,7 +4207,7 @@
       ctl + "</div>";
   };
 
-  EchoTimerCard.prototype._adjustHtml = function (it) {
+  EchoClockCard.prototype._adjustHtml = function (it) {
     return '<div class="tile adj ' + it.state + '" data-slot="' + it.slot + '">' +
       '<div class="head"><span class="nm">Adjust ' + esc(it.name === "Timer" ? "timer" : it.name) + "</span></div>" +
       '<div class="mid2"><div class="big"></div><div class="delta"></div></div>' +
@@ -3284,49 +4219,61 @@
       "</div>";
   };
 
-  EchoTimerCard.prototype._adderHtml = function (count) {
-    var presets = this._config.presets;
-    var chips = "";
-    for (var i = 0; i < presets.length && i < 8; i++) {
-      chips += '<div class="chip" role="button" data-act="preset" data-min="' + presets[i] + '">' + (presets[i] >= 60 && presets[i] % 60 === 0 ? presets[i] / 60 + " hr" : presets[i] + " min") + "</div>";
+  EchoClockCard.prototype._adderHtml = function (count, cols) {
+    var presets = this._config.presets, chips = "", max = cols >= 3 ? 3 : 6;
+    for (var i = 0; i < presets.length && i < max; i++) {
+      var p = presets[i];
+      chips += '<div class="chip" role="button" data-act="preset" data-min="' + p + '">' + (p >= 60 && p % 60 === 0 ? p / 60 + " hr" : p + " min") + "</div>";
     }
     return '<div class="tile add">' +
       '<div class="cap">' + (count ? "Add a timer" : "New timer") + "</div>" +
-      '<div class="readout"></div>' +
-      '<div class="row"><div class="slider"><div class="fill"></div><ha-icon icon="mdi:timer-outline"></ha-icon></div>' +
-      '<div class="chips">' + chips + "</div></div>" +
+      '<div class="wheels tw"></div>' +
+      '<div class="chips">' + chips + "</div>" +
       '<div class="go" role="button" data-act="start"><ha-icon icon="mdi:play"></ha-icon>Start</div>' +
       "</div>";
   };
 
-  EchoTimerCard.prototype._setIdx = function (idx) {
-    if (idx === this._minIdx) return;
-    this._minIdx = idx;
-    this._paintSlider();
+  EchoClockCard.prototype._mountTimerWheels = function () {
+    var host = this._mainEl.querySelector(".wheels.tw"), self = this;
+    this._twWheels = [];
+    if (!host) return;
+    var tw = this._tw;
+    function onSpin() {
+      tw.h = self._twWheels[0].value(); tw.m = self._twWheels[1].value(); tw.s = self._twWheels[2].value();
+      self._paintAdder();
+    }
+    function onSettle() { onSpin(); if (self._renderLater) { self._renderLater = false; self._render(); } }
+    var opts = [["h", 0, 23, "hours", " hrs"], ["m", 0, 59, "min", ""], ["s", 0, 59, "sec", ""]];
+    opts.forEach(function (o) {
+      var w = new Wheel({ values: range(o[1], o[2]), index: tw[o[0]], unit: o[3], cls: "unitd" + o[4], onSpin: function () { if (self._twWheels.length === 3) onSpin(); }, onChange: onSettle });
+      host.appendChild(w.el);
+      self._twWheels.push(w);
+    });
+    requestAnimationFrame(function () { self._twWheels.forEach(function (w) { w.paint(); }); });
+    this._paintAdder();
   };
 
-  EchoTimerCard.prototype._paintSlider = function () {
-    if (!this._fillEl) return;
-    var min = STOPS[this._minIdx];
-    var f = (this._minIdx + 1) / STOPS.length;
-    this._fillEl.style.transform = "scaleY(" + f.toFixed(4) + ")";
-    this._readEl.textContent = fmtMinutes(min);
+  EchoClockCard.prototype._twSecs = function () { return this._tw.h * 3600 + this._tw.m * 60 + this._tw.s; };
+
+  EchoClockCard.prototype._paintAdder = function () {
+    var secs = this._twSecs();
     var chips = this._mainEl.querySelectorAll(".chip");
     for (var i = 0; i < chips.length; i++) {
-      var on = parseInt(chips[i].getAttribute("data-min"), 10) === min;
+      var on = parseInt(chips[i].getAttribute("data-min"), 10) * 60 === secs;
       if (on !== chips[i].classList.contains("sel")) chips[i].classList.toggle("sel");
     }
+    var go = this._mainEl.querySelector(".go");
+    if (go && (secs === 0) !== go.classList.contains("off")) go.classList.toggle("off");
   };
 
   // ---- adjust mode ----
 
-  // Most time that may be removed (keeps at least 10 s on the clock), in minutes.
-  EchoTimerCard.prototype._maxRemove = function () {
+  EchoClockCard.prototype._maxRemove = function () {
     var it = this._adj ? this._item(this._adj.slot) : null;
     return Math.max(0, Math.floor((this._left(it) - 10) / 60));
   };
 
-  EchoTimerCard.prototype._adjFrom = function (track, clientX) {
+  EchoClockCard.prototype._adjFrom = function (track, clientX) {
     var r = track.getBoundingClientRect();
     var f = ((clientX - r.left) / r.width) * 2 - 1;
     f = Math.max(-1, Math.min(1, f));
@@ -3339,15 +4286,14 @@
     }
   };
 
-  EchoTimerCard.prototype._paintAdjust = function () {
+  EchoClockCard.prototype._paintAdjust = function () {
     if (!this._adj) return;
     var tile = this._mainEl.querySelector('.adj[data-slot="' + this._adj.slot + '"]');
     if (!tile) return;
     var d = this._adj.delta;
-    // Knob position from the delta's place on the stop scale.
     var idx = 0;
     for (var i = 0; i < ADJ.length; i++) if (ADJ[i] <= Math.abs(d)) idx = i;
-    var pos = (d < 0 ? -1 : 1) * idx / (ADJ.length - 1);   // -1..1
+    var pos = (d < 0 ? -1 : 1) * idx / (ADJ.length - 1);
     var pct = 50 + pos * 50;
     var knob = tile.querySelector(".knob"), fill = tile.querySelector(".afill");
     knob.style.left = "calc(" + pct.toFixed(2) + "% + " + (-pos * 3.8).toFixed(2) + "vh)";
@@ -3360,7 +4306,8 @@
     this._paintTimes();
   };
 
-  EchoTimerCard.prototype._paintTimes = function () {
+  EchoClockCard.prototype._paintTimes = function () {
+    if (this._tab !== "timers") return;
     var items = this._items || [];
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
@@ -3394,9 +4341,9 @@
     }
   };
 
-  // ---------- actions ----------
+  // ---------- timer actions ----------
 
-  EchoTimerCard.prototype._action = function (act, slot, el) {
+  EchoClockCard.prototype._action = function (act, slot, el) {
     var hass = this._hass;
     if (!hass) return;
     var cfg = this._config;
@@ -3404,19 +4351,17 @@
     var scr = function (id) { return id.replace(/^script\./, ""); };
     if (act === "preset") {
       var min = parseInt(el.getAttribute("data-min"), 10);
-      var idx = STOPS.indexOf(min);
-      if (idx < 0) {
-        STOPS.push(min); STOPS.sort(function (a, b) { return a - b; });
-        idx = STOPS.indexOf(min);
-      }
-      this._minIdx = idx;
-      this._paintSlider();
+      this._tw = { h: Math.floor(min / 60), m: min % 60, s: 0 };
+      var tw = this._tw, w = this._twWheels || [];
+      if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(0, true); }
+      this._paintAdder();
     } else if (act === "start") {
-      var now = Date.now();
+      var now = Date.now(), secs = this._twSecs();
+      if (!secs) return;
       if (this._pending.start && now - this._pending.start < 1500) return; // debounce double taps
       this._pending.start = now;
-      this._adding = false;   // the new timer's tile replaces the setter
-      hass.callService("script", scr(cfg.start_script), { duration: STOPS[this._minIdx] * 60, navigate: false, prefix: cfg.timer_prefix });
+      this._adding = false;
+      hass.callService("script", scr(cfg.start_script), { duration: secs, navigate: false, prefix: cfg.timer_prefix });
     } else if (act === "pause") {
       hass.callService("timer", "pause", { entity_id: timer });
     } else if (act === "resume") {
@@ -3441,9 +4386,8 @@
       var it = this._item(slot), d = this._adj ? this._adj.delta : 0;
       this._adj = null;
       if (it && d) {
-        // Restart the timer with the new remaining time (keeps it paused if it was paused).
-        var secs = Math.max(10, Math.round(this._left(it) + d * 60));
-        var p = hass.callService("timer", "start", { entity_id: timer, duration: secs });
+        var s2 = Math.max(10, Math.round(this._left(it) + d * 60));
+        var p = hass.callService("timer", "start", { entity_id: timer, duration: s2 });
         if (it.state === "paused" && p && p.then) {
           p.then(function () { hass.callService("timer", "pause", { entity_id: timer }); });
         }
@@ -3452,16 +4396,26 @@
     }
   };
 
-  if (!customElements.get("echo-timer-card")) {
-    customElements.define("echo-timer-card", EchoTimerCard);
+  // The same card under its old name, so existing dashboards keep working.
+  function EchoTimerCardAlias() {
+    var self = Reflect.construct(HTMLElement, [], new.target || EchoTimerCardAlias);
+    initCard(self);
+    return self;
   }
+  EchoTimerCardAlias.prototype = Object.create(EchoClockCard.prototype);
+  EchoTimerCardAlias.prototype.constructor = EchoTimerCardAlias;
+  Object.setPrototypeOf(EchoTimerCardAlias, HTMLElement);
+
+  if (!customElements.get("echo-clock-card")) customElements.define("echo-clock-card", EchoClockCard);
+  if (!customElements.get("echo-timer-card")) customElements.define("echo-timer-card", EchoTimerCardAlias);
+  window.EchoClockWheel = Wheel;
   window.customCards = window.customCards || [];
   window.customCards.push({
-    type: "echo-timer-card",
-    name: "Echo Timer Card",
-    description: "Full-screen timers (up to three) for wall tablets",
+    type: "echo-clock-card",
+    name: "Echo Clock Card",
+    description: "Full-screen clock for wall tablets: Kiosk Satellite alarms, stopwatch and timers",
   });
-  console.info("%c echo-timer-card " + VERSION + " ", "background:#ff9f0a;color:#000;border-radius:3px");
+  console.info("%c echo-clock-card " + VERSION + " ", "background:#ff9f0a;color:#000;border-radius:3px");
 })();
 
 /* ===== echo-media-card.js ===== */
@@ -6377,6 +7331,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.2.1", cards: ["echo-show-common 1.2.0","echo-weather-card 1.7.1","echo-timer-card 1.8.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
-  console.info("%c Echo Show Dashboard 1.2.1 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.3.0", cards: ["echo-show-common 1.3.0","echo-weather-card 1.7.1","echo-clock-card 2.0.0","echo-media-card 1.9.0","echo-notify 1.2.0"] };
+  console.info("%c Echo Show Dashboard 1.3.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

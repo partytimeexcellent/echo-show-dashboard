@@ -8,11 +8,15 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
   shadow DOM, sizes in `vh`). No dependencies, no frameworks. Has to run on the old Fire OS Chromium WebView.
   - `echo-show-common.js`: `window.EchoShow` (prefs, settings panel `<echo-show-settings>`,
     timer overlay `<echo-timer-overlay>`, themes, display detection). Loaded first.
-  - `echo-weather-card.js`, `echo-timer-card.js`, `echo-media-card.js`: the three pages.
+  - `echo-weather-card.js`, `echo-clock-card.js`, `echo-media-card.js`: the three pages. The clock card also registers
+    as `echo-timer-card` (old name). Its Alarms tab drives Kiosk Satellite's on-device alarms by firing
+    `kiosk_satellite_alarm` and waiting for `kiosk_satellite_alarm_result` (the protocol of KS's alarm blueprint);
+    there is no alarm method on `window.kioskSatellite`. `Wheel` in that file is the iOS-style picker.
   - `echo-notify.js`: full-screen alerts (NWS, persistent notifications `echo_*`, `echo_notify` events).
 - `dist/echo-show-dashboard.js`: built bundle, **committed**. HACS installs it.
 - `homeassistant/`: package (timer helpers and scripts), Jinja macros, blueprints, example dashboard.
-- `test/`: `index.html` is a fake HA (`#weather`, `#timers`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`);
+- `test/`: `index.html` is a fake HA (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
+  `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
   `smoke.js` loads every card in Playwright; `validate_ha.py` checks the YAML/Jinja.
 
 ## Workflow
