@@ -184,14 +184,16 @@ The settings panel's **Alarms** tab sets the tablet's own Kiosk Satellite alarm 
    curl -X POST http://<tablet-ip>:2324/api/login -H 'Content-Type: application/json' \
      -d '{"password": "<admin password>", "ttl_days": 3650}'
    ```
-4. Add a pair per tablet to `secrets.yaml`. `<name>` is a word from the tablet's Kiosk Satellite device name, e.g. `kitchen` for "Kitchen Echo Show 8":
+4. Add a pair per tablet to `secrets.yaml`. `<name>` is part of the tablet's Kiosk Satellite device name that no other tablet's name contains. The full name is safest: `kitchen_echo_show_8` for "Kitchen Echo Show 8" (plain `kitchen` would also match a "Kitchen Echo Show 5"). The script checks the tablet's own name and skips a pair that belongs to another tablet:
    ```yaml
    echo_kiosk_<name>_url: http://<tablet-ip>:2324
    echo_kiosk_<name>_token: <the token>
    ```
 5. Restart Home Assistant.
 
-The same helper drives the **Microphone** tile on the settings panel's General tab: it sets Kiosk Satellite's own **Mute microphone** (`voice.mute`), which stops the wake word and closes the microphone. Without the helper the tile falls back to the **VS Mute** switch (or the older `switch.<device>_mute`).
+#### Microphone
+
+The **Microphone** tile on the settings panel's General tab sets Kiosk Satellite's own **Mute microphone**, which stops the wake word and closes the microphone. It uses the display's **VS Mute** switch (`switch.<device>_vs_mute`), so it works on any display with **Expose kiosk entities** turned on under **Settings › ESPHome** in Kiosk Satellite, with no other setup. On a display without that switch, the alarm-settings helper above sets `voice.mute` over the Remote API instead, and without either the tile falls back to the older `switch.<device>_mute`.
 
 The token stays in `secrets.yaml`; the script never prints it, and only `alarms.*` settings and `voice.mute` can be changed through it.
 

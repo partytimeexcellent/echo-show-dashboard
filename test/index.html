@@ -56,6 +56,7 @@ put(S("media_player.living_room", "idle", Object.assign({}, base, { group_member
 // a Kiosk Satellite display
 var D = "kitchen_echo_show_8";
 put(S("switch." + D + "_mute", "off", { icon: "mdi:microphone-off" }));
+if (/[?&]vsmute/.test(location.search)) put(S("switch." + D + "_vs_mute", /[?&]micoff/.test(location.search) ? "on" : "off"));
 put(S("switch." + D + "_camera_enabled", "on"));
 put(S("switch." + D + "_rtsp_streaming", "off"));
 put(S("switch." + D + "_screensaver_motion_detection", "on"));

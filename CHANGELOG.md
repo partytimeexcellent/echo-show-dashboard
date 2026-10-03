@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.3
+
+- Settings › General: the **Microphone** tile now uses the display's **VS Mute** switch (`switch.<device>_vs_mute`, Kiosk Satellite's own Mute microphone) whenever Home Assistant has it, so it works on every display with **Expose kiosk entities** on, with no secrets.yaml entry. The Remote API helper is only used on displays without that switch. When a display has no way to mute, the tile's place shows what to turn on.
+- Alarm-settings helper (`echo_kiosk.py`): fixed a display reaching another tablet whose secrets name is part of its own name (with only `echo_kiosk_kitchen_*`, a "Kitchen Echo Show 5" changed the "Kitchen Echo Show 8"). The script now asks the tablet its name and skips pairs that belong to another display, preferring the longest matching name. Update `custom_templates/echo_kiosk.py`.
+
 ## 1.6.2
 
 - Settings › General: **Wake sound** and **Wake word sensitivity** now control Kiosk Satellite's own entities (`switch.<device>_vs_chimes`, `select.<device>_vs_wake_word_sensitivity`), falling back to the old Voice Satellite ones only when the native ones don't exist.

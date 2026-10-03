@@ -8,8 +8,8 @@ can't call the tablet's Remote API itself (it sends no CORS headers), and Home
 Assistant can't join a !secret with a URL path or a "Bearer " prefix, so this
 script reads the two secrets per tablet and makes the request:
 
-    # secrets.yaml - one pair per tablet; <name> is a word in its Kiosk Satellite
-    # device name ("kitchen" for "Kitchen Echo Show 8").
+    # secrets.yaml - one pair per tablet; <name> is part of its Kiosk Satellite device
+    # name that no other tablet has ("kitchen_echo_show_8" for "Kitchen Echo Show 8").
     echo_kiosk_<name>_url: http://<tablet-ip>:2324
     echo_kiosk_<name>_token: <long-lived token from POST /api/login with ttl_days>
 
@@ -99,16 +99,51 @@ def tablets():
 
 
 def pick(kiosk):
+    """The secrets pair for this display: the longest <name> found in its Kiosk Satellite
+    name that belongs to it. A short <name> can match several displays ("kitchen" is in
+    both "Kitchen Echo Show 8" and "Kitchen Echo Show 5"), so each candidate tablet is asked
+    its own name and one that names a different display is skipped."""
     name = norm(kiosk)
-    best = None
-    for key, pair in tablets().items():
-        k = norm(key)
-        if k and k in name and (best is None or len(k) > len(norm(best[0]))):
-            best = (key, pair)
-    if not best:
+    found = [(k, pair) for k, pair in tablets().items() if norm(k) and norm(k) in name]
+    if not found:
         out({"ok": False, "error": "no_secrets",
              "message": "No echo_kiosk_<name>_url / _token pair in secrets.yaml matches \"%s\"." % kiosk})
-    return best
+    found.sort(key=lambda kp: -len(norm(kp[0])))
+    others = []
+    for key, (base, token) in found:
+        real = tablet_name(base, token)
+        if real is None or is_named(real, kiosk):
+            return key, (base, token)
+        others.append("echo_kiosk_%s_* is \"%s\"" % (key, real))
+    out({"ok": False, "error": "wrong_tablet",
+         "message": "None of the secrets.yaml pairs that match \"%s\" are for this display (%s). Add an "
+                    "echo_kiosk_<name>_url / _token pair whose <name> only this display has, such as its full name."
+                    % (kiosk, "; ".join(others))})
+
+
+def is_named(real, kiosk):
+    """kiosk is "<Kiosk Satellite name> <entity prefix>" from the dashboard (either may be missing)."""
+    r = norm(real)
+    return bool(r) and r in (norm(kiosk), norm(kiosk.rsplit(" ", 1)[0]), norm(kiosk.rsplit(" ", 1)[-1]))
+
+
+def tablet_name(base, token):
+    """The tablet's own device name from /api/info, or None when it can't tell."""
+    url = base + "/api/info"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            info = json.loads(r.read().decode("utf-8") or "{}")
+    except Exception:   # unreachable or refused: let the real request report it
+        return None
+    if not isinstance(info, dict):
+        return None
+    for d in (info, info.get("device") if isinstance(info.get("device"), dict) else {}):
+        for k in ("deviceName", "name"):
+            if isinstance(d.get(k), str) and d[k].strip():
+                return d[k]
+    return None
 
 
 # ---------- the tablet's Remote API ----------
