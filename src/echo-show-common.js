@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.2";
+  var VERSION = "1.6.3";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -469,7 +469,7 @@
   EchoShowSettings.prototype._refresh = function (force) {
     if (!this._built || !this._hass || this._drag) return;
     if (this._tab === "alarms" && !this._ks) this._ksLoad();
-    if (this._tab === "general" && this._device && !this._mic) this._micLoad();
+    if (this._tab === "general" && this._device && !this._mic && !this._micEntity()) this._micLoad();
     var ae = this.shadowRoot.activeElement;
     if (ae && ae.tagName === "INPUT") return;      // don't wipe what is being typed
     var html = this["_tab_" + this._tab] ? this["_tab_" + this._tab]() : "";
@@ -520,9 +520,15 @@
   };
 
   // --- Microphone: Kiosk Satellite's "Mute microphone" (setting voice.mute) ---
-  // Set over the tablet's Remote API through shell_command.echo_kiosk, the same route as the
-  // Alarms tab. switch.<dev>_mute is the old dashboard Voice Satellite's mute and doesn't stop
-  // the native wake word, so it is only a last resort when the helper isn't installed.
+  // switch.<dev>_vs_mute is that setting itself (Settings > ESPHome > Expose kiosk entities), so any
+  // display that exposes it works with no per-tablet setup. Without it, the setting is changed over
+  // the tablet's Remote API through shell_command.echo_kiosk, the same route as the Alarms tab.
+  // switch.<dev>_mute is the old dashboard Voice Satellite's mute and doesn't stop the native wake
+  // word, so it is only a last resort.
+  EchoShowSettings.prototype._micEntity = function () {
+    var vs = this._dev("switch", "vs_mute"), st = vs && this._st(vs);
+    return st && st.state !== "unavailable" ? vs : null;
+  };
   EchoShowSettings.prototype._micLoad = function () {
     var self = this;
     this._mic = { loading: true };
@@ -532,14 +538,17 @@
     });
   };
   EchoShowSettings.prototype._micState = function () {
-    var m = this._mic || {}, vs = this._dev("switch", "vs_mute"), old = this._dev("switch", "mute");
+    var m = this._mic || {}, vs = this._micEntity(), old = this._dev("switch", "mute");
     var hold = this._local.mic && this._local.mic.until > Date.now() ? this._local.mic.v : undefined;
-    var live = vs && this._st(vs) && /^(on|off)$/.test(this._st(vs).state) ? this._isOn(vs) : undefined;
-    if (m.api) return { muted: hold !== undefined ? hold : live !== undefined ? live : m.muted, via: "api" };
-    if (m.loading) return vs || old ? { muted: hold !== undefined ? hold : live !== undefined ? live : null, via: "wait" } : { muted: null, via: "wait" };
-    if (vs) return { muted: hold !== undefined ? hold : !!live, via: "entity", id: vs };
+    if (vs) return { muted: hold !== undefined ? hold : this._isOn(vs), via: "entity", id: vs };
+    if (m.api) return { muted: hold !== undefined ? hold : m.muted, via: "api" };
+    if (m.loading) return { muted: hold !== undefined ? hold : null, via: "wait" };
     if (old) return { muted: hold !== undefined ? hold : this._isOn(old), via: "entity", id: old, legacy: true };
     return null;
+  };
+  EchoShowSettings.prototype._micHelp = function () {
+    return "Turn on <b>Expose kiosk entities</b> under Settings &gt; ESPHome in Kiosk Satellite on this display, so Home Assistant gets its VS Mute switch." +
+      (this._mic && this._mic.why ? " (Remote API: " + esc(this._mic.why) + ")" : "");
   };
   EchoShowSettings.prototype._micToggle = function () {
     var self = this, ms = this._micState();
@@ -584,8 +593,8 @@
     if (wake) { var w = this._isOn(wake); h += this._tile(wake, w ? "mdi:bullhorn" : "mdi:bullhorn-outline", "Wake sound", w, w ? "Beep when listening" : "Silent", "toggle"); }
     h += "</div>";
     if (this._mic && this._mic.msg) h += '<div class="note warn">' + esc(this._mic.msg) + "</div>";
-    else if (ms && ms.legacy) h += '<div class="note warn">Microphone is using the old mute switch, which may not stop the wake word. ' +
-      esc((this._mic && this._mic.why) || "The tablet's Remote API isn't reachable.") + "</div>";
+    else if (ms && ms.legacy) h += '<div class="note warn">Microphone is using the old mute switch, which may not stop the wake word. ' + this._micHelp() + "</div>";
+    else if (!ms && this._mic && !this._mic.loading) h += '<div class="note warn">No microphone control for this display. ' + this._micHelp() + "</div>";
     if (vol || avol || mvol) {
       h += '<div class="sec">Volume</div>';
       if (vol) h += this._slider(vol, "mdi:volume-high", "Device", this._numVal(vol), 0, 100, "%", "number");

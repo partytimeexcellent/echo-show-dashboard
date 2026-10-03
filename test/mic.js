@@ -1,4 +1,5 @@
-// Settings › General › Microphone: muted over the Remote API (shell_command.echo_kiosk mic / mic_set).
+// Settings › General › Microphone: the VS Mute switch when the display exposes it, else the Remote API
+// (shell_command.echo_kiosk mic / mic_set).
 //   NODE_PATH=$(npm root -g) node test/mic.js
 const { chromium } = require("playwright");
 const path = require("path");
@@ -31,6 +32,17 @@ const path = require("path");
   await p.goto(url + "?noshell#settings-general"); await p.reload(); await p.waitForTimeout(1400);
   check(await sr(() => /old mute switch/.test(document.querySelector("echo-show-settings").shadowRoot.textContent)), "no helper: falls back with a note");
   await p.screenshot({ path: out("mic-noshell") });
+  await p.goto(url + "?vsmute#settings-general"); await p.reload(); await p.waitForTimeout(1400);
+  check(/On/.test(await tile()), "VS Mute: starts on: " + await tile());
+  await click(); await p.waitForTimeout(600);
+  check(await sr(() => calls.some((c) => c[1] === "turn_on" && c[2].entity_id === "switch.kitchen_echo_show_8_vs_mute")), "VS Mute: turned on the VS Mute switch");
+  check(await sr(() => !calls.some((c) => c[0] === "ks")), "VS Mute: no Remote API call");
+  check(/Off/.test(await tile()), "VS Mute: shows off: " + await tile());
+
+  await p.goto(url + "?vsmute&micoff&noshell#settings-general"); await p.reload(); await p.waitForTimeout(1400);
+  check(/Off/.test(await tile()), "VS Mute: reads muted state without the helper: " + await tile());
+  check(await sr(() => !/old mute switch/.test(document.querySelector("echo-show-settings").shadowRoot.textContent)), "VS Mute: no fallback note");
+
   check(!errs.length, "no page errors " + errs.join("; "));
   await b.close();
   process.exit(fail ? 1 : 0);

@@ -3,7 +3,8 @@
 #
 # Lets the settings panel's Alarms tab read and change each tablet's Kiosk Satellite
 # alarm settings (volume, tone, snooze, ease-in, sunrise, phrase) and add ringtones,
-# and lets the General tab's Microphone tile mute the tablet's Voice Satellite.
+# and lets the General tab's Microphone tile mute the tablet's Voice Satellite on a
+# display that doesn't expose its VS Mute switch to Home Assistant.
 # Home Assistant runs a small script that talks to the tablet's Remote API.
 #
 # Install:
@@ -16,8 +17,9 @@
 #        curl -X POST http://<tablet-ip>:2324/api/login \
 #          -H 'Content-Type: application/json' \
 #          -d '{"password": "<admin password>", "ttl_days": 3650}'
-#   5. Add a pair per tablet to secrets.yaml. <name> is a word from the tablet's
-#      Kiosk Satellite device name ("kitchen" for "Kitchen Echo Show 8"):
+#   5. Add a pair per tablet to secrets.yaml. <name> is part of the tablet's Kiosk
+#      Satellite device name that no other tablet's name contains; the full name is
+#      safest ("kitchen_echo_show_8" for "Kitchen Echo Show 8"):
 #        echo_kiosk_<name>_url: http://<tablet-ip>:2324
 #        echo_kiosk_<name>_token: <the token>
 #   6. Restart Home Assistant.
