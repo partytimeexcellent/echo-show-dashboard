@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.3";
+  var VERSION = "1.6.4";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -214,11 +214,11 @@
     }
     return false;
   }
-  // The display's entity prefix: configured, or derived from the Kiosk Satellite name.
+  // The display's entity prefix: a matching devices entry, else derived from the Kiosk Satellite
+  // name, else the configured default (which would otherwise steer every display to one tablet).
   function resolveDevice(hass, name, esCfg) {
     var prof = esCfg ? matchDisplay(esCfg.devices, name) : null;
     if (prof && prof.device) return prof.device;
-    if (esCfg && esCfg.device) return esCfg.device;
     var slug = slugify(name);
     if (slug && hasDevice(hass, slug)) return slug;
     if (name) {
@@ -227,7 +227,7 @@
         if (id.indexOf("assist_satellite.") === 0 && String(hass.states[id].attributes.friendly_name || "").toLowerCase() === ln) return id.split(".")[1];
       }
     }
-    return null;
+    return (esCfg && esCfg.device) || null;
   }
 
   // ---------- settings panel ----------

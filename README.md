@@ -120,7 +120,7 @@ All cards also accept `buttons` (the bottom row), `devices` (per-display overrid
 
 ### Settings panel and this display
 
-The gear button (`action: settings`) works the same on every page. Its **General** and **Display** tabs control the tablet through the entities the [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) app creates in Home Assistant (`switch.<display>_mute`, `switch.<display>_camera_enabled`, `light.<display>_screen`, `number.<display>_volume`, …); only the controls a display actually has are shown. The display is found from its Kiosk Satellite name (e.g. "Kitchen Echo Show 8" → `kitchen_echo_show_8`). If that doesn't match, set it at the top level of the dashboard's raw config:
+The gear button (`action: settings`) works the same on every page. Its **General** and **Display** tabs control the tablet through the entities the [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) app creates in Home Assistant (`switch.<display>_mute`, `switch.<display>_camera_enabled`, `light.<display>_screen`, `number.<display>_volume`, …); only the controls a display actually has are shown. The display is found from its Kiosk Satellite name (e.g. "Kitchen Echo Show 8" → `kitchen_echo_show_8`). If that doesn't match, set it at the top level of the dashboard's raw config. `device` is only used by displays whose name finds no entities and that no `devices` entry matches:
 
 ```yaml
 echo_show:
