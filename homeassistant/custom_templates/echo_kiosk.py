@@ -435,6 +435,13 @@ def main():
         want = re.compile(str(data.get("match") or "alarm|tone|ring|sound|audio"), re.I)
         lines = [e for e in (r.get("logs") or []) if want.search(json.dumps(e))]
         out({"ok": True, "logs": lines[-int(data.get("limit") or 40):]})
+    if op == "commands":   # the tablet's Remote API commands (read-only), optionally filtered by name
+        r = call(base, token, "GET", "/api/commands") or {}
+        cmds = r.get("commands", r) if isinstance(r, dict) else r
+        want = re.compile(str(data.get("match") or "."), re.I)
+        if isinstance(cmds, dict):
+            cmds = [dict(v, name=k) if isinstance(v, dict) else {"name": k, "info": v} for k, v in cmds.items()]
+        out({"ok": True, "commands": [c for c in (cmds or []) if want.search(json.dumps(c))]})
     if op == "install_tones":
         added = install_tones(base, token, bool(data.get("force")))
         out({"ok": True, "added": added, "sounds": sounds(base, token)})

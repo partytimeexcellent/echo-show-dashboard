@@ -8,7 +8,11 @@ blueprint:
     voice satellite that heard the command. These sentences take priority over Assist's
     built-in timer intents.
 
-    Create ONE automation from this blueprint and list every display in it.
+    Create ONE automation from this blueprint. A display is found from the satellite that
+    heard the command: its timer set is timer.<display>_timer_1..3 (the dashboard's settings
+    panel creates it; <display> is its Kiosk Satellite name slugified), else the shared
+    echo_timer set, and its own Dashboard view select opens the timers page. List a display
+    under Displays only to override that.
     Needs the helpers and scripts from packages/echo_show.yaml and
     custom_templates/echo_timers.jinja from the Echo Show Dashboard repository.
   domain: automation
@@ -17,17 +21,12 @@ blueprint:
     displays:
       name: Displays
       description: >-
-        One entry per Echo Show. satellite = its assist_satellite entity, Kiosk Satellite's own
-        <area>_<name>_assist_satellite (how a command
-        is matched to a display), timer_prefix = its timer set, media_player = its own
-        media player (optional; "stop" pauses it when no timer is ringing),
-        view_select = its Kiosk Satellite "Dashboard view" select (optional). The first
-        entry is used when the satellite can't be identified.
-      default:
-        - satellite: assist_satellite.my_area_my_display_assist_satellite
-          timer_prefix: echo_timer
-          media_player: media_player.kitchen_echo_show_8
-          view_select: select.kitchen_echo_show_8_dashboard_view
+        Optional overrides, one entry per display that needs one. satellite = its
+        assist_satellite entity (how a command is matched to an entry), timer_prefix = its
+        timer set, media_player = its own media player ("stop" pauses it when no timer is
+        ringing), view_select = its Kiosk Satellite "Dashboard view" select. Anything left
+        out is found from the display's name. Empty list: every display is found by name.
+      default: []
       selector:
         object: {}
     timers_view:
@@ -44,11 +43,16 @@ variables:
   view: !input timers_view
   di: >-
     {% from 'echo_timers.jinja' import display_index %}{{ display_index(trigger.device_id if trigger.device_id is defined else none, displays) | int }}
-  dsp: "{{ displays[di] if displays | count > di else {} }}"
-  pfx: "{{ dsp.timer_prefix | default('echo_timer', true) }}"
+  dsp: "{{ displays[di] if di >= 0 and displays | count > di else {} }}"
+  dev: "{{ trigger.device_id if trigger.device_id is defined else none }}"
+  slug: >-
+    {% from 'echo_timers.jinja' import display_slug %}{{ display_slug(dev) }}
+  pfx: >-
+    {% from 'echo_timers.jinja' import prefix_for_device %}{{ dsp.timer_prefix | default('', true) or prefix_for_device(dev) }}
   mp: >-
     {{ dsp.media_player | default('', true) or ((device_entities(trigger.device_id) if trigger.device_id is defined and trigger.device_id else []) | select('match', 'media_player\.') | reject('is_state', 'unavailable') | first | default('', true)) }}
-  vsel: "{{ dsp.view_select | default('', true) }}"
+  vsel: >-
+    {% from 'echo_timers.jinja' import display_entity %}{{ dsp.view_select | default('', true) or display_entity(slug, 'select', 'dashboard_view') }}
   act: "{{ trigger.id.split('_')[0] }}"
   all_flag: "{{ trigger.id.endswith('_all') }}"
   info: >-

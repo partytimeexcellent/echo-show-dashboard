@@ -8,10 +8,11 @@
 #   2. Copy this file to <config>/packages/echo_show.yaml
 #   3. Restart Home Assistant.
 #
-# Everything here is for ONE timer set, "echo_timer" (timer.echo_timer_1..3). Each
-# display that should have its own timers needs its own set: copy the three timers and
-# the three *_name helpers below with a new prefix (for example "office_timer") and
-# give that display `timer_prefix: office_timer` in the dashboard's `devices:` section.
+# The timers here are the SHARED set, "echo_timer" (timer.echo_timer_1..3), used by any
+# display without a set of its own. A display uses its own timer.<display>_timer_1..3 and
+# input_text.<display>_timer_N_name when they exist (<display> = its Kiosk Satellite name
+# slugified): tap "Set up timers for this display" in the settings panel's Timers tab, or
+# create them under Settings > Helpers with exactly those names.
 #
 # The media card's shared queue helpers (input_text.echo_media_src_<room>) are only
 # needed if you use the media card WITHOUT a direct Music Assistant connection. Add one

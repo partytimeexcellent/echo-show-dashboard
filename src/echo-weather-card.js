@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.2";
+  var VERSION = "1.7.3";
 
 
   // ---------- which display is this? ----------
@@ -35,6 +35,8 @@
     return window.__echoDisplayP;
   }
 
+  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
+  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -428,6 +430,11 @@
     if (!hasWeather) throw new Error("echo-weather-card: at least one source must be a weather.* entity");
     this._config = config;
     this._sourceIndex = this._loadSource();
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
@@ -442,9 +449,10 @@
   // Timers a button tracks (per-display prefix overrides the configured list).
   EchoWeatherCard.prototype._timersFor = function (btn) {
     if (!btn.timers) return null;
-    if (!this._timerPrefix) return btn.timers;
+    var pfx = this._timerPrefix || ownTimers(this._hass);
+    if (!pfx) return btn.timers;
     var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + this._timerPrefix + "_" + i);
+    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
     return out;
   };
 

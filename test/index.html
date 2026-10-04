@@ -47,6 +47,13 @@ put(S("input_text.echo_timer_1_name", "Pasta"));
 put(S("timer.echo_timer_2", "paused", { duration: "0:20:00", remaining: "0:14:30" }));
 put(S("input_text.echo_timer_2_name", "Bread"));
 put(S("timer.echo_timer_3", "idle", { duration: "0:05:00" }));
+// ?ownset: this display has its own timer set (timer.kitchen_echo_show_8_timer_N)
+if (/[?&]ownset/.test(location.search)) {
+  put(S("timer.kitchen_echo_show_8_timer_1", "active", { duration: "0:08:00", finishes_at: new Date(now + 432e3).toISOString(), remaining: "0:07:12" }));
+  put(S("input_text.kitchen_echo_show_8_timer_1_name", "Soup"));
+  put(S("timer.kitchen_echo_show_8_timer_2", "idle", { duration: "0:05:00" })); put(S("input_text.kitchen_echo_show_8_timer_2_name", ""));
+  put(S("timer.kitchen_echo_show_8_timer_3", "idle", { duration: "0:05:00" })); put(S("input_text.kitchen_echo_show_8_timer_3_name", ""));
+}
 put(S("input_text.echo_timer_3_name", ""));
 put(S("input_select.echo_timer_alarm_tone", "Chime", { options: ["Chime", "Marimba", "Bells"] }));
 put(S("input_number.echo_timer_alarm_volume", "80", { min: 10, max: 100, step: 5 }));
@@ -187,6 +194,10 @@ var hass = {
   language: "en", locale: { language: "en" },
   callService: function (d, s, data) { calls.push([d, s, data]); return Promise.resolve(); },
   callWS: function (m) { calls.push(["ws", m.type]);
+    if (m.type === "timer/create" || m.type === "input_text/create") {
+      if (/[?&]nonadmin/.test(location.search)) return Promise.reject({ code: "unauthorized", message: "Unauthorized" });
+      calls.push(["create", m.type, m.name]); return Promise.resolve({ id: m.name });
+    }
     if (m.type === "call_service" && m.domain === "shell_command" && m.service === "echo_kiosk") { calls.push(["ks", m.service_data.op, m.service_data.data]); return echoKiosk(m.service_data.op, m.service_data.data); }
     if (m.type === "fire_event" && m.event_type === "kiosk_satellite_alarm") {
       var r = Object.assign({ id: m.event_data.id, kiosk: "Kitchen Echo Show 8" }, kiosk(m.event_data));

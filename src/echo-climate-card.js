@@ -16,7 +16,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.1";
+  var VERSION = "1.0.2";
 
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
@@ -36,6 +36,8 @@
     if (window.EchoShow && window.EchoShow.displayName) return window.EchoShow.displayName();
     return Promise.resolve("");
   }
+  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
+  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -358,6 +360,11 @@
     if (!config || !config.entity) throw new Error("echo-climate-card: set entity (your climate.* thermostat)");
     this._raw = config;
     this._apply(null);
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
@@ -1546,9 +1553,10 @@
   // ---------- timers on the nav buttons + the countdown overlay (like the other pages) ----------
   EchoClimateCard.prototype._timersFor = function (btn) {
     if (!btn.timers) return null;
-    if (!this._config.timer_prefix) return btn.timers;
+    var pfx = this._config.timer_prefix || ownTimers(this._hass);
+    if (!pfx) return btn.timers;
     var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + this._config.timer_prefix + "_" + i);
+    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
     return out;
   };
   EchoClimateCard.prototype._overlayTimers = function () {

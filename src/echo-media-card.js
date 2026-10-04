@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.9.0";
+  var VERSION = "1.10.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -73,6 +73,8 @@
     return window.__echoDisplayP;
   }
 
+  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
+  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -512,6 +514,11 @@
     }
     this._raw = config;
     this._applyProfile(null);
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
@@ -556,11 +563,13 @@
       ma_urls: c.ma_url ? [].concat(c.ma_url) : [],
       ma_token: c.ma_token || null,
     };
+    // A default room set for this display (devices entry or settings panel) beats the area guess.
+    this._defFixed = !!(prof && prof.default_player !== undefined);
     // This display's choices from the settings panel.
     var P = window.EchoShow ? window.EchoShow.prefs : null;
     if (P) {
       var room = P.get("media_room"), fol = P.get("media_follow");
-      if (room !== null && room !== undefined) this._config.default_player = room || null;
+      if (room !== null && room !== undefined) { this._config.default_player = room || null; this._defFixed = true; }
       if (fol !== null && fol !== undefined) this._config.follow_playing = !!fol;
     }
   };
@@ -698,9 +707,10 @@
   // Pick the room to show: this display's room, unless it is quiet and another room is
   // playing (then show that one). Stays put once the user has chosen a room.
   EchoMediaCard.prototype._autoSelect = function () {
-    var def = 0;
-    if (this._config.default_player) {
-      var d = this._roomOf(this._config.default_player);
+    var def = 0, dp = this._config.default_player;
+    if (!this._defFixed) { var ar = this._areaRoom(); if (ar) dp = ar.entity; }
+    if (dp) {
+      var d = this._roomOf(dp);
       if (d) def = d.i;
     }
     var pick = def;
@@ -710,6 +720,16 @@
       }
     }
     this._sel = pick;
+  };
+
+  // The speaker in this display's Home Assistant area, if exactly one of the rooms is there.
+  EchoMediaCard.prototype._areaRoom = function () {
+    var ES = window.EchoShow, h = this._hass;
+    if (!ES || !ES.ownArea || !h) return null;
+    var area = ES.ownArea(h), hit = [];
+    if (!area) return null;
+    for (var i = 0; i < this._rooms.length; i++) if (ES.areaOf(h, this._rooms[i].entity) === area) hit.push(this._rooms[i]);
+    return hit.length === 1 ? hit[0] : null;
   };
 
   EchoMediaCard.prototype._volOf = function (entityId) {
@@ -2208,9 +2228,10 @@
 
   EchoMediaCard.prototype._timersFor = function (btn) {
     if (!btn.timers) return null;
-    if (!this._timerPrefix) return btn.timers;
+    var pfx = this._timerPrefix || ownTimers(this._hass);
+    if (!pfx) return btn.timers;
     var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + this._timerPrefix + "_" + i);
+    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
     return out;
   };
 

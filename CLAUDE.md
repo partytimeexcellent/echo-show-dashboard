@@ -29,7 +29,7 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
 - `test/`: `index.html` is a fake HA (`#climate[-schedule|-comfort|-insights|-house|-day]`, `?heating`, `?hold`, `?away`, `?rooms`, `?filter`, `?override`, `?mode=heat`) (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
   `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
   `alarm-list.js` drives the Clock Alarms tab (volume row, swipe/Edit delete, Undo); `alarms-settings.js` drives the settings Alarms tab (fake `shell_command.echo_kiosk`; `?notones`, `?noshell`);
-  `smoke.js` loads every card in Playwright; `validate_ha.py` checks the YAML/Jinja.
+  `smoke.js` loads every card in Playwright; `timers-own.js` checks per-display timer sets (`?ownset`, `?nonadmin`); `validate_ha.py` checks the YAML/Jinja.
 
 ## Workflow
 1. Edit `src/`, bump that file's `VERSION` (and `package.json` for a release), add to CHANGELOG.

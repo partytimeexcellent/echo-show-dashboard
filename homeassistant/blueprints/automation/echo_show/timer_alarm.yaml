@@ -4,7 +4,12 @@ blueprint:
     When one of a display's three Echo Show timers finishes: wake its screen, switch it to
     the timers view and raise its volume to the alarm level. The timers page itself rings
     until the timer is dismissed (on screen or by voice), then the volume goes back to
-    what it was. Create one automation from this blueprint per timer set / display.
+    what it was.
+
+    Leave "Timer set" empty and ONE automation covers every display: a timer named
+    timer.<display>_timer_N belongs to the display whose Kiosk Satellite name slugifies to
+    <display>, and that display's volume, screensaver button and view select are found by
+    name. Or fill the inputs in to handle one timer set only.
 
     Needs the helpers from packages/echo_show.yaml and
     custom_templates/echo_timers.jinja from the Echo Show Dashboard repository.
@@ -13,13 +18,15 @@ blueprint:
   input:
     timer_prefix:
       name: Timer set
-      description: Prefix of the display's timers (timer.<prefix>_1..3).
-      default: echo_timer
+      description: >-
+        Prefix of one display's timers (timer.<prefix>_1..3). Empty: every display's own
+        set (timer.<display>_timer_N) and the shared echo_timer set.
+      default: ""
       selector:
         text: {}
     volume_entity:
       name: Display volume
-      description: The Kiosk Satellite volume number of this display (number.*_volume).
+      description: The Kiosk Satellite volume number of this display (number.*_volume). Empty finds it by name.
       default: []
       selector:
         entity:
@@ -50,16 +57,26 @@ blueprint:
         entity:
           domain: input_number
 
-mode: single
-max_exceeded: silent
+mode: parallel
+max: 10
 
 variables:
-  pfx: !input timer_prefix
-  vol: !input volume_entity
-  btn: !input screensaver_button
-  sel: !input view_select
+  pfx_in: !input timer_prefix
+  vol_in: !input volume_entity
+  btn_in: !input screensaver_button
+  sel_in: !input view_select
   view: !input timers_view
   alarm_vol: !input alarm_volume
+  tid: "{{ trigger.event.data.entity_id if trigger is defined and trigger.event is defined else '' }}"
+  pfx: "{{ pfx_in if pfx_in else (tid.split('.')[1] | default('') | regex_replace('_[123]$', '')) }}"
+  slug: >-
+    {% from 'echo_timers.jinja' import slug_for_prefix %}{{ slug_for_prefix(pfx) }}
+  vol: >-
+    {% from 'echo_timers.jinja' import display_entity %}{{ vol_in if vol_in else display_entity(slug, 'number', 'volume') }}
+  btn: >-
+    {% from 'echo_timers.jinja' import display_entity %}{{ btn_in if btn_in else display_entity(slug, 'button', 'postpone_screensaver') }}
+  sel: >-
+    {% from 'echo_timers.jinja' import display_entity %}{{ sel_in if sel_in else display_entity(slug, 'select', 'dashboard_view') }}
 
 trigger:
   - platform: event
@@ -68,13 +85,14 @@ trigger:
 condition:
   - condition: template
     value_template: >-
-      {{ trigger.event.data.entity_id in ['timer.' ~ pfx ~ '_1', 'timer.' ~ pfx ~ '_2', 'timer.' ~ pfx ~ '_3'] }}
+      {% if pfx_in %}{{ tid in ['timer.' ~ pfx ~ '_1', 'timer.' ~ pfx ~ '_2', 'timer.' ~ pfx ~ '_3'] }}
+      {%- else -%}{{ tid is match('timer\\..+_[123]$') and (pfx == 'echo_timer' or (pfx.endswith('_timer') and states('timer.' ~ pfx ~ '_1') != 'unknown')) }}{% endif %}
 
 action:
-  # Remembered for this run only; later timers that finish while this one is still
-  # ringing are covered by the wait below (mode: single).
+  # Remembered for this run only. A second timer of the same set that finishes while the
+  # first still rings finds the alarm volume already set and leaves restoring to the first run.
   - variables:
-      saved_volume: "{{ states(vol) | float(40) if vol else none }}"
+      saved_volume: "{{ states(vol) | float(none) if vol and states(vol) | float(-1) != states(alarm_vol) | float(100) else none }}"
   - if:
       - condition: template
         value_template: "{{ vol | length > 0 }}"

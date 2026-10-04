@@ -69,6 +69,7 @@ env.filters.update(
         "from_json": json.loads,
         "float": _float,
         "int": _int,
+        "slugify": lambda v: re.sub(r"[^a-z0-9]+", "_", str(v).lower()).strip("_"),
     }
 )
 FAKE_STATES = {}
@@ -80,6 +81,7 @@ env.globals.update(
         "as_timestamp": lambda v, d=0: d,
         "now": lambda: 0,
         "device_entities": lambda d: {"sat-office": ["assist_satellite.office_echo"]}.get(d, []),
+        "device_attr": lambda d, a: {"sat-office": "Office Echo Show 8", "sat-new": "Kitchen Echo Show 5"}.get(d) if a == "name" else None,
     }
 )
 
@@ -175,10 +177,24 @@ if got != "1 hour and 30 minutes":
 
 displays = [{"satellite": "assist_satellite.kitchen_echo", "timer_prefix": "echo_timer"},
             {"satellite": "assist_satellite.office_echo", "timer_prefix": "office_timer"}]
-for dev, want in {"sat-office": "1", None: "0", "unknown-device": "0"}.items():
+for dev, want in {"sat-office": "1", None: "0", "unknown-device": "-1"}.items():
     got = render("{% from 'echo_timers.jinja' import display_index %}{{ display_index(d, ds) }}", d=dev, ds=displays)
     if got != want:
         failures.append(f"display_index({dev!r}) = {got!r}, expected {want}")
+got = render("{% from 'echo_timers.jinja' import display_index %}{{ display_index(d, []) }}", d="sat-office")
+if got != "-1":
+    failures.append(f"display_index with no displays = {got!r}, expected -1")
+
+# Each display's own timer set, found from its device name.
+FAKE_STATES.update({"timer.office_echo_show_8_timer_1": "idle"})
+for dev, want in {"sat-office": "office_echo_show_8_timer", "sat-new": "echo_timer", None: "echo_timer"}.items():
+    got = render("{% from 'echo_timers.jinja' import prefix_for_device %}{{ prefix_for_device(d) }}", d=dev)
+    if got != want:
+        failures.append(f"prefix_for_device({dev!r}) = {got!r}, expected {want}")
+for pfx, want in {"kitchen_echo_show_5_timer": "kitchen_echo_show_5", "echo_timer": "", "office_timer": "office"}.items():
+    got = render("{% from 'echo_timers.jinja' import slug_for_prefix %}{{ slug_for_prefix(p) }}", p=pfx)
+    if got != want:
+        failures.append(f"slug_for_prefix({pfx!r}) = {got!r}, expected {want!r}")
 
 FAKE_STATES.update({"timer.echo_timer_1": "active", "input_text.echo_timer_1_name": "Pasta",
                     "timer.echo_timer_2": "idle", "input_text.echo_timer_2_name": "Eggs",

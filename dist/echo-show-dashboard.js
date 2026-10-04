@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.6.4
+ * Echo Show Dashboard 1.7.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.6.4, echo-weather-card 1.7.2, echo-clock-card 2.2.1, echo-media-card 1.9.0, echo-climate-card 1.0.1, echo-notify 1.2.0
+ * echo-show-common 1.7.0, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.10.0, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -31,7 +31,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.4";
+  var VERSION = "1.7.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -237,6 +237,44 @@
       }
     }
     return (esCfg && esCfg.device) || null;
+  }
+
+  // ---------- this display's own timer set: timer.<device>_timer_1..3 + input_text.<device>_timer_N_name ----------
+  var ownSlug;                          // undefined until asked, then the device slug (or null)
+  function timerSetOf(slug) { return slug ? slug + "_timer" : null; }
+  function hasTimerSet(hass, prefix) { return !!(prefix && hass && hass.states["timer." + prefix + "_1"]); }
+  // The display's own timer prefix when its helpers exist, else null (cards then use their configured timers).
+  // Synchronous for render code: the first call starts the lookup and the next hass update has the answer.
+  function ownTimerPrefix(hass) {
+    if (!hass) return null;
+    if (ownSlug === undefined) {
+      ownSlug = null;
+      Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
+        ownSlug = resolveDevice(hass, r[0], (r[1] || {}).echo_show) || null;
+        // Cards re-render with their own timers and area once this is known.
+        if (ownSlug) window.dispatchEvent(new CustomEvent("echo-show-device", { detail: { device: ownSlug } }));
+      }, function () { /* stays null */ });
+    }
+    var p = timerSetOf(ownSlug);
+    return hasTimerSet(hass, p) ? p : null;
+  }
+  // The Home Assistant area of an entity (its own, else its device's).
+  function areaOf(hass, id) {
+    var e = hass && hass.entities ? hass.entities[id] : null;
+    if (!e) return null;
+    return e.area_id || (e.device_id && hass.devices && hass.devices[e.device_id] ? hass.devices[e.device_id].area_id || null : null);
+  }
+  // This display's area: the first of its Kiosk Satellite entities that has one.
+  function ownArea(hass) {
+    ownTimerPrefix(hass);               // starts the device lookup
+    if (!ownSlug || !hass || !hass.entities) return null;
+    for (var id in hass.entities) {
+      var o = id.slice(id.indexOf(".") + 1) + "_";
+      if (o.indexOf(ownSlug + "_") !== 0 && o.indexOf("_" + ownSlug + "_") === -1) continue;
+      var a = areaOf(hass, id);
+      if (a) return a;
+    }
+    return null;
   }
 
   // ---------- settings panel ----------
@@ -701,8 +739,42 @@
   };
 
   EchoShowSettings.prototype._tab_timers = function () {
-    return '<div class="sec">Alarm</div><div class="alarm"></div>' +
+    var h = "", p = timerSetOf(this._device), ts = this._tset || {};
+    if (this._device && !hasTimerSet(this._hass, p)) {
+      h += '<div class="sec">This display\'s timers</div>' +
+        '<div class="note warn">This display is using the shared timers, so its timers also show on other displays that have no set of their own.</div>' +
+        '<div class="btns"><div class="bt go' + (ts.busy ? " busy" : "") + '" role="button" data-a="tset"><ha-icon icon="mdi:timer-plus-outline"></ha-icon>' +
+        (ts.busy ? "Setting up…" : "Set up timers for this display") + "</div></div>" +
+        (ts.err ? '<div class="note warn">' + esc(ts.err) + "</div>" : "");
+    } else if (ts.done) {
+      h += '<div class="note">This display now has its own timers (timer.' + esc(p) + "_1 to _3).</div>";
+    }
+    return h + '<div class="sec">Alarm</div><div class="alarm"></div>' +
       '<div class="note">Volume and tone are shared by every display and by the "alarm when finished" automation.</div>';
+  };
+  // Creates timer.<device>_timer_1..3 and input_text.<device>_timer_1..3_name. Home Assistant only lets an
+  // administrator create helpers, so a display signed in as another user gets told what to create instead.
+  EchoShowSettings.prototype._timerSetup = function () {
+    var self = this, h = this._hass, slug = this._device, p = timerSetOf(slug);
+    if (!slug || (this._tset && this._tset.busy)) return;
+    var label = slugify(this._name) === slug ? String(this._name) : slug.replace(/_/g, " ").replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
+    this._tset = { busy: true };
+    this._refresh(false);
+    var steps = [];
+    [1, 2, 3].forEach(function (i) {
+      if (!h.states["timer." + p + "_" + i]) steps.push({ type: "timer/create", name: label + " Timer " + i, icon: "mdi:timer-outline", duration: "00:05:00", restore: true });
+      if (!h.states["input_text." + p + "_" + i + "_name"]) steps.push({ type: "input_text/create", name: label + " Timer " + i + " Name", icon: "mdi:label-outline", min: 0, max: 40, mode: "text" });
+    });
+    steps.reduce(function (pr, msg) { return pr.then(function () { return h.callWS(msg); }); }, Promise.resolve()).then(function () {
+      self._tset = { done: true };
+      if (self._tab === "timers") self._refresh(true);
+    }, function (e) {
+      var m = (e && (e.message || e.code)) || "";
+      self._tset = { err: /unauthor|admin|permission/i.test(m) || (e && e.code === "unauthorized")
+        ? "Only a Home Assistant administrator can create timers. Sign this display in as an admin once and tap the button again, or create timer." + p + "_1 to _3 and input_text." + p + "_1_name to _3_name under Settings › Devices & services › Helpers."
+        : "Couldn't create the timers: " + (m || "no answer from Home Assistant.") };
+      if (self._tab === "timers") self._refresh(false);
+    });
   };
   EchoShowSettings.prototype._mountAlarm = function () {
     var host = this._bodyEl.querySelector(".alarm");
@@ -987,6 +1059,8 @@
       h.callService("number", "set_value", { entity_id: id, value: parseFloat(v) });
     } else if (a === "press" && id) {
       h.callService("button", "press", { entity_id: id });
+    } else if (a === "tset") {
+      this._timerSetup();
     } else if (a === "reload") {
       var rl = this._device ? this._dev("button", "reload_page") : null;
       if (rl) h.callService("button", "press", { entity_id: rl }); else window.location.reload();
@@ -1201,6 +1275,9 @@
     settingsOpen: function () { return !!current; },
     displayName: echoDisplayName,
     devEnt: devEnt,
+    ownTimerPrefix: ownTimerPrefix,
+    ownArea: ownArea,
+    areaOf: areaOf,
     // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.
     deviceSlug: function (hass) {
       return Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
@@ -1227,7 +1304,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.2";
+  var VERSION = "1.7.3";
 
 
   // ---------- which display is this? ----------
@@ -1252,6 +1329,8 @@
     return window.__echoDisplayP;
   }
 
+  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
+  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -1645,6 +1724,11 @@
     if (!hasWeather) throw new Error("echo-weather-card: at least one source must be a weather.* entity");
     this._config = config;
     this._sourceIndex = this._loadSource();
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
@@ -1659,9 +1743,10 @@
   // Timers a button tracks (per-display prefix overrides the configured list).
   EchoWeatherCard.prototype._timersFor = function (btn) {
     if (!btn.timers) return null;
-    if (!this._timerPrefix) return btn.timers;
+    var pfx = this._timerPrefix || ownTimers(this._hass);
+    if (!pfx) return btn.timers;
     var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + this._timerPrefix + "_" + i);
+    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
     return out;
   };
 
@@ -2635,7 +2720,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.2.1";
+  var VERSION = "2.3.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -3601,6 +3686,11 @@
   EchoClockCard.prototype.setConfig = function (config) {
     this._raw = config || {};
     this._applyProfile(null);
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       self._display = name;
@@ -3616,9 +3706,12 @@
 
   EchoClockCard.prototype._applyProfile = function (prof) {
     var config = {}, k;
+    this._prof = prof;
     for (k in this._raw) config[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") config[k] = prof[k];
-    var prefix = config.timer_prefix || "echo_timer";
+    // A configured timer_prefix wins; else this display's own set (timer.<device>_timer_N), else the shared one.
+    this._fixedPrefix = !!(config.timer_prefix || config.slots);
+    var prefix = config.timer_prefix || this._ownPrefix || "echo_timer";
     var slots = config.slots;
     if (!slots) {
       slots = [];
@@ -3656,6 +3749,10 @@
       var first = !this._hass;
       this._hass = hass;
       if (!this._config) return;
+      if (!this._fixedPrefix) {
+        var ES = window.EchoShow, own = ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null;
+        if (own && own !== this._ownPrefix) { this._ownPrefix = own; this._applyProfile(this._prof || null); this._sig = ""; }
+      }
       if (!this._built) { this._build(); this._startIdle(); }
       this._update();
       this._alarmState();
@@ -3695,18 +3792,20 @@
 
   var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
 
-  // The assist satellite to watch: the configured one if it exists and isn't unavailable, else this
-  // display's native Kiosk Satellite one (assist_satellite.<device>_assist_satellite).
+  // The assist satellite to watch: this display's native Kiosk Satellite one
+  // (assist_satellite.<device>_assist_satellite) when it has one, else the configured one. The configured
+  // one used to come first, so every display paused its timer alarm while the configured display listened.
   EchoClockCard.prototype._satState = function () {
     var h = this._hass, st = h ? h.states : null, id = this._config.satellite;
     if (!st) return null;
-    if (id && st[id] && st[id].state !== "unavailable") return st[id];
     var slug = this._devSlug;
     if (slug) {
       if (this._satAuto && st[this._satAuto] && st[this._satAuto].state !== "unavailable") return st[this._satAuto];
       this._satAuto = null;
       for (var k in st) {
-        if (k.indexOf("assist_satellite.") === 0 && k.indexOf(slug) !== -1 && /_assist_satellite$/.test(k) && st[k].state !== "unavailable") { this._satAuto = k; return st[k]; }
+        if (k.indexOf("assist_satellite.") !== 0 || st[k].state === "unavailable") continue;
+        var o = k.slice(17);   // assist_satellite.<area>_<device>_assist_satellite, or assist_satellite.<device>
+        if ((o.indexOf(slug) !== -1 && /_assist_satellite$/.test(o)) || o === slug || o.slice(-slug.length - 1) === "_" + slug) { this._satAuto = k; return st[k]; }
       }
     }
     return id ? st[id] || null : null;
@@ -4950,7 +5049,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.9.0";
+  var VERSION = "1.10.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -5006,6 +5105,8 @@
     return window.__echoDisplayP;
   }
 
+  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
+  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -5445,6 +5546,11 @@
     }
     this._raw = config;
     this._applyProfile(null);
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
@@ -5489,11 +5595,13 @@
       ma_urls: c.ma_url ? [].concat(c.ma_url) : [],
       ma_token: c.ma_token || null,
     };
+    // A default room set for this display (devices entry or settings panel) beats the area guess.
+    this._defFixed = !!(prof && prof.default_player !== undefined);
     // This display's choices from the settings panel.
     var P = window.EchoShow ? window.EchoShow.prefs : null;
     if (P) {
       var room = P.get("media_room"), fol = P.get("media_follow");
-      if (room !== null && room !== undefined) this._config.default_player = room || null;
+      if (room !== null && room !== undefined) { this._config.default_player = room || null; this._defFixed = true; }
       if (fol !== null && fol !== undefined) this._config.follow_playing = !!fol;
     }
   };
@@ -5631,9 +5739,10 @@
   // Pick the room to show: this display's room, unless it is quiet and another room is
   // playing (then show that one). Stays put once the user has chosen a room.
   EchoMediaCard.prototype._autoSelect = function () {
-    var def = 0;
-    if (this._config.default_player) {
-      var d = this._roomOf(this._config.default_player);
+    var def = 0, dp = this._config.default_player;
+    if (!this._defFixed) { var ar = this._areaRoom(); if (ar) dp = ar.entity; }
+    if (dp) {
+      var d = this._roomOf(dp);
       if (d) def = d.i;
     }
     var pick = def;
@@ -5643,6 +5752,16 @@
       }
     }
     this._sel = pick;
+  };
+
+  // The speaker in this display's Home Assistant area, if exactly one of the rooms is there.
+  EchoMediaCard.prototype._areaRoom = function () {
+    var ES = window.EchoShow, h = this._hass;
+    if (!ES || !ES.ownArea || !h) return null;
+    var area = ES.ownArea(h), hit = [];
+    if (!area) return null;
+    for (var i = 0; i < this._rooms.length; i++) if (ES.areaOf(h, this._rooms[i].entity) === area) hit.push(this._rooms[i]);
+    return hit.length === 1 ? hit[0] : null;
   };
 
   EchoMediaCard.prototype._volOf = function (entityId) {
@@ -7141,9 +7260,10 @@
 
   EchoMediaCard.prototype._timersFor = function (btn) {
     if (!btn.timers) return null;
-    if (!this._timerPrefix) return btn.timers;
+    var pfx = this._timerPrefix || ownTimers(this._hass);
+    if (!pfx) return btn.timers;
     var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + this._timerPrefix + "_" + i);
+    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
     return out;
   };
 
@@ -7260,7 +7380,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.1";
+  var VERSION = "1.0.2";
 
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
@@ -7280,6 +7400,8 @@
     if (window.EchoShow && window.EchoShow.displayName) return window.EchoShow.displayName();
     return Promise.resolve("");
   }
+  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
+  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -7602,6 +7724,11 @@
     if (!config || !config.entity) throw new Error("echo-climate-card: set entity (your climate.* thermostat)");
     this._raw = config;
     this._apply(null);
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
@@ -8790,9 +8917,10 @@
   // ---------- timers on the nav buttons + the countdown overlay (like the other pages) ----------
   EchoClimateCard.prototype._timersFor = function (btn) {
     if (!btn.timers) return null;
-    if (!this._config.timer_prefix) return btn.timers;
+    var pfx = this._config.timer_prefix || ownTimers(this._hass);
+    if (!pfx) return btn.timers;
     var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + this._config.timer_prefix + "_" + i);
+    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
     return out;
   };
   EchoClimateCard.prototype._overlayTimers = function () {
@@ -8916,7 +9044,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.2.0";
+  var VERSION = "1.3.0";
   if (window.echoNotify && window.echoNotify.version) return;  // loaded twice
 
   var LS_DISMISSED = "echo-notify-dismissed";
@@ -9409,13 +9537,17 @@
 
   // ---------- source: HA persistent notifications with id "echo_*" ----------
   // Optional severity in the id: echo_<info|minor|moderate|severe|extreme>_<anything>.
+  // Optional target at the end: echo_<anything>@<part of a display's name>, e.g. echo_leak@kitchen_echo_show_5,
+  // shows only on displays whose Kiosk Satellite name contains it (spaces and underscores are the same).
+  function slugOf(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""); }
   function PnSource(mgr, c) {
     var prefix = c.prefix || "echo_";
     var all = {};
     function publish() {
       var list = [], id;
       for (id in all) {
-        var p = all[id];
+        var p = all[id], at = id.lastIndexOf("@");
+        if (at > 0 && slugOf(mgr._display).indexOf(slugOf(id.slice(at + 1))) === -1) continue;
         var m = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(info|minor|moderate|severe|extreme)_").exec(id);
         list.push({
           id: id,
@@ -9453,7 +9585,7 @@
     }
     var unsub = mgr.conn.subscribeEvents(function (ev) {
       var d = ev.data || {};
-      if (d.display && String(mgr._display || "").toLowerCase().indexOf(String(d.display).toLowerCase()) === -1) return;
+      if (d.display && slugOf(mgr._display).indexOf(slugOf(d.display)) === -1) return;
       if (d.dismiss) { if (d.id) mgr.remove("event", d.id); return; }
       mgr.add({
         source: "event", id: d.id, severity: d.severity, icon: d.icon, color: d.color,
@@ -9492,6 +9624,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.6.4", cards: ["echo-show-common 1.6.4","echo-weather-card 1.7.2","echo-clock-card 2.2.1","echo-media-card 1.9.0","echo-climate-card 1.0.1","echo-notify 1.2.0"] };
-  console.info("%c Echo Show Dashboard 1.6.4 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.7.0", cards: ["echo-show-common 1.7.0","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.10.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.7.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

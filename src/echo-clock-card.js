@@ -12,7 +12,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.2.1";
+  var VERSION = "2.3.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -978,6 +978,11 @@
   EchoClockCard.prototype.setConfig = function (config) {
     this._raw = config || {};
     this._applyProfile(null);
+    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+      this._devL = true;
+      var me = this;
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+    }
     var self = this;
     echoDisplayName().then(function (name) {
       self._display = name;
@@ -993,9 +998,12 @@
 
   EchoClockCard.prototype._applyProfile = function (prof) {
     var config = {}, k;
+    this._prof = prof;
     for (k in this._raw) config[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") config[k] = prof[k];
-    var prefix = config.timer_prefix || "echo_timer";
+    // A configured timer_prefix wins; else this display's own set (timer.<device>_timer_N), else the shared one.
+    this._fixedPrefix = !!(config.timer_prefix || config.slots);
+    var prefix = config.timer_prefix || this._ownPrefix || "echo_timer";
     var slots = config.slots;
     if (!slots) {
       slots = [];
@@ -1033,6 +1041,10 @@
       var first = !this._hass;
       this._hass = hass;
       if (!this._config) return;
+      if (!this._fixedPrefix) {
+        var ES = window.EchoShow, own = ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null;
+        if (own && own !== this._ownPrefix) { this._ownPrefix = own; this._applyProfile(this._prof || null); this._sig = ""; }
+      }
       if (!this._built) { this._build(); this._startIdle(); }
       this._update();
       this._alarmState();
@@ -1072,18 +1084,20 @@
 
   var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
 
-  // The assist satellite to watch: the configured one if it exists and isn't unavailable, else this
-  // display's native Kiosk Satellite one (assist_satellite.<device>_assist_satellite).
+  // The assist satellite to watch: this display's native Kiosk Satellite one
+  // (assist_satellite.<device>_assist_satellite) when it has one, else the configured one. The configured
+  // one used to come first, so every display paused its timer alarm while the configured display listened.
   EchoClockCard.prototype._satState = function () {
     var h = this._hass, st = h ? h.states : null, id = this._config.satellite;
     if (!st) return null;
-    if (id && st[id] && st[id].state !== "unavailable") return st[id];
     var slug = this._devSlug;
     if (slug) {
       if (this._satAuto && st[this._satAuto] && st[this._satAuto].state !== "unavailable") return st[this._satAuto];
       this._satAuto = null;
       for (var k in st) {
-        if (k.indexOf("assist_satellite.") === 0 && k.indexOf(slug) !== -1 && /_assist_satellite$/.test(k) && st[k].state !== "unavailable") { this._satAuto = k; return st[k]; }
+        if (k.indexOf("assist_satellite.") !== 0 || st[k].state === "unavailable") continue;
+        var o = k.slice(17);   // assist_satellite.<area>_<device>_assist_satellite, or assist_satellite.<device>
+        if ((o.indexOf(slug) !== -1 && /_assist_satellite$/.test(o)) || o === slug || o.slice(-slug.length - 1) === "_" + slug) { this._satAuto = k; return st[k]; }
       }
     }
     return id ? st[id] || null : null;

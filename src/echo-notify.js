@@ -23,7 +23,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.2.0";
+  var VERSION = "1.3.0";
   if (window.echoNotify && window.echoNotify.version) return;  // loaded twice
 
   var LS_DISMISSED = "echo-notify-dismissed";
@@ -516,13 +516,17 @@
 
   // ---------- source: HA persistent notifications with id "echo_*" ----------
   // Optional severity in the id: echo_<info|minor|moderate|severe|extreme>_<anything>.
+  // Optional target at the end: echo_<anything>@<part of a display's name>, e.g. echo_leak@kitchen_echo_show_5,
+  // shows only on displays whose Kiosk Satellite name contains it (spaces and underscores are the same).
+  function slugOf(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""); }
   function PnSource(mgr, c) {
     var prefix = c.prefix || "echo_";
     var all = {};
     function publish() {
       var list = [], id;
       for (id in all) {
-        var p = all[id];
+        var p = all[id], at = id.lastIndexOf("@");
+        if (at > 0 && slugOf(mgr._display).indexOf(slugOf(id.slice(at + 1))) === -1) continue;
         var m = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(info|minor|moderate|severe|extreme)_").exec(id);
         list.push({
           id: id,
@@ -560,7 +564,7 @@
     }
     var unsub = mgr.conn.subscribeEvents(function (ev) {
       var d = ev.data || {};
-      if (d.display && String(mgr._display || "").toLowerCase().indexOf(String(d.display).toLowerCase()) === -1) return;
+      if (d.display && slugOf(mgr._display).indexOf(slugOf(d.display)) === -1) return;
       if (d.dismiss) { if (d.id) mgr.remove("event", d.id); return; }
       mgr.add({
         source: "event", id: d.id, severity: d.severity, icon: d.icon, color: d.color,

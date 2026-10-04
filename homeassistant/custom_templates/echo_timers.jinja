@@ -91,12 +91,38 @@
 {%- endmacro -%}
 
 {#- Index (0-based) of the display whose assist satellite heard a voice command.
-    displays: the list from the voice blueprint; falls back to the first display. -#}
+    displays: the list from the voice blueprint. A command from a satellite not in the list gives -1
+    (the display is then found from its own name); one with no satellite at all uses the first entry. -#}
 {%- macro display_index(device_id, displays) -%}
 {%- set ents = device_entities(device_id) if device_id else [] -%}
-{%- set ns = namespace(i=0, found=false) -%}
+{%- set ns = namespace(i=(-1 if device_id else 0), found=false) -%}
 {%- for d in displays -%}
 {%- if not ns.found and d.satellite is defined and d.satellite in ents -%}{%- set ns.i = loop.index0 -%}{%- set ns.found = true -%}{%- endif -%}
 {%- endfor -%}
-{{- ns.i -}}
+{{- ns.i if displays | count > 0 else -1 -}}
+{%- endmacro -%}
+
+{#- A display's slug: its Home Assistant device name, slugified ("Kitchen Echo Show 5" -> kitchen_echo_show_5).
+    The dashboard derives the same slug from the Kiosk Satellite device name. -#}
+{%- macro display_slug(device_id) -%}
+{{- ((device_attr(device_id, 'name') or '') | slugify) if device_id else '' -}}
+{%- endmacro -%}
+
+{#- The timer set of the display a voice command came from: timer.<slug>_timer_1..3 when that display has
+    its own set (the dashboard's settings panel creates it), else the shared echo_timer set. -#}
+{%- macro prefix_for_device(device_id) -%}
+{%- set s = display_slug(device_id) -%}
+{{- (s ~ '_timer') if s and states('timer.' ~ s ~ '_timer_1') != 'unknown' else 'echo_timer' -}}
+{%- endmacro -%}
+
+{#- The display a timer set belongs to (kitchen_echo_show_5_timer -> kitchen_echo_show_5); '' for the shared set. -#}
+{%- macro slug_for_prefix(prefix) -%}
+{{- prefix[:-6] if prefix.endswith('_timer') and prefix != 'echo_timer' else '' -}}
+{%- endmacro -%}
+
+{#- A Kiosk Satellite entity of a display: <domain>.<slug>_<suffix>, also with the area doubled in front
+    (number.kitchen_kitchen_echo_show_5_volume). '' when there is none. -#}
+{%- macro display_entity(slug, domain, suffix) -%}
+{%- set t = slug ~ '_' ~ suffix -%}
+{{- (states[domain] | map(attribute='entity_id') | select('search', '[._]' ~ t ~ '$') | first | default('', true)) if slug else '' -}}
 {%- endmacro -%}

@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.4";
+  var VERSION = "1.7.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -228,6 +228,44 @@
       }
     }
     return (esCfg && esCfg.device) || null;
+  }
+
+  // ---------- this display's own timer set: timer.<device>_timer_1..3 + input_text.<device>_timer_N_name ----------
+  var ownSlug;                          // undefined until asked, then the device slug (or null)
+  function timerSetOf(slug) { return slug ? slug + "_timer" : null; }
+  function hasTimerSet(hass, prefix) { return !!(prefix && hass && hass.states["timer." + prefix + "_1"]); }
+  // The display's own timer prefix when its helpers exist, else null (cards then use their configured timers).
+  // Synchronous for render code: the first call starts the lookup and the next hass update has the answer.
+  function ownTimerPrefix(hass) {
+    if (!hass) return null;
+    if (ownSlug === undefined) {
+      ownSlug = null;
+      Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
+        ownSlug = resolveDevice(hass, r[0], (r[1] || {}).echo_show) || null;
+        // Cards re-render with their own timers and area once this is known.
+        if (ownSlug) window.dispatchEvent(new CustomEvent("echo-show-device", { detail: { device: ownSlug } }));
+      }, function () { /* stays null */ });
+    }
+    var p = timerSetOf(ownSlug);
+    return hasTimerSet(hass, p) ? p : null;
+  }
+  // The Home Assistant area of an entity (its own, else its device's).
+  function areaOf(hass, id) {
+    var e = hass && hass.entities ? hass.entities[id] : null;
+    if (!e) return null;
+    return e.area_id || (e.device_id && hass.devices && hass.devices[e.device_id] ? hass.devices[e.device_id].area_id || null : null);
+  }
+  // This display's area: the first of its Kiosk Satellite entities that has one.
+  function ownArea(hass) {
+    ownTimerPrefix(hass);               // starts the device lookup
+    if (!ownSlug || !hass || !hass.entities) return null;
+    for (var id in hass.entities) {
+      var o = id.slice(id.indexOf(".") + 1) + "_";
+      if (o.indexOf(ownSlug + "_") !== 0 && o.indexOf("_" + ownSlug + "_") === -1) continue;
+      var a = areaOf(hass, id);
+      if (a) return a;
+    }
+    return null;
   }
 
   // ---------- settings panel ----------
@@ -692,8 +730,42 @@
   };
 
   EchoShowSettings.prototype._tab_timers = function () {
-    return '<div class="sec">Alarm</div><div class="alarm"></div>' +
+    var h = "", p = timerSetOf(this._device), ts = this._tset || {};
+    if (this._device && !hasTimerSet(this._hass, p)) {
+      h += '<div class="sec">This display\'s timers</div>' +
+        '<div class="note warn">This display is using the shared timers, so its timers also show on other displays that have no set of their own.</div>' +
+        '<div class="btns"><div class="bt go' + (ts.busy ? " busy" : "") + '" role="button" data-a="tset"><ha-icon icon="mdi:timer-plus-outline"></ha-icon>' +
+        (ts.busy ? "Setting up…" : "Set up timers for this display") + "</div></div>" +
+        (ts.err ? '<div class="note warn">' + esc(ts.err) + "</div>" : "");
+    } else if (ts.done) {
+      h += '<div class="note">This display now has its own timers (timer.' + esc(p) + "_1 to _3).</div>";
+    }
+    return h + '<div class="sec">Alarm</div><div class="alarm"></div>' +
       '<div class="note">Volume and tone are shared by every display and by the "alarm when finished" automation.</div>';
+  };
+  // Creates timer.<device>_timer_1..3 and input_text.<device>_timer_1..3_name. Home Assistant only lets an
+  // administrator create helpers, so a display signed in as another user gets told what to create instead.
+  EchoShowSettings.prototype._timerSetup = function () {
+    var self = this, h = this._hass, slug = this._device, p = timerSetOf(slug);
+    if (!slug || (this._tset && this._tset.busy)) return;
+    var label = slugify(this._name) === slug ? String(this._name) : slug.replace(/_/g, " ").replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
+    this._tset = { busy: true };
+    this._refresh(false);
+    var steps = [];
+    [1, 2, 3].forEach(function (i) {
+      if (!h.states["timer." + p + "_" + i]) steps.push({ type: "timer/create", name: label + " Timer " + i, icon: "mdi:timer-outline", duration: "00:05:00", restore: true });
+      if (!h.states["input_text." + p + "_" + i + "_name"]) steps.push({ type: "input_text/create", name: label + " Timer " + i + " Name", icon: "mdi:label-outline", min: 0, max: 40, mode: "text" });
+    });
+    steps.reduce(function (pr, msg) { return pr.then(function () { return h.callWS(msg); }); }, Promise.resolve()).then(function () {
+      self._tset = { done: true };
+      if (self._tab === "timers") self._refresh(true);
+    }, function (e) {
+      var m = (e && (e.message || e.code)) || "";
+      self._tset = { err: /unauthor|admin|permission/i.test(m) || (e && e.code === "unauthorized")
+        ? "Only a Home Assistant administrator can create timers. Sign this display in as an admin once and tap the button again, or create timer." + p + "_1 to _3 and input_text." + p + "_1_name to _3_name under Settings › Devices & services › Helpers."
+        : "Couldn't create the timers: " + (m || "no answer from Home Assistant.") };
+      if (self._tab === "timers") self._refresh(false);
+    });
   };
   EchoShowSettings.prototype._mountAlarm = function () {
     var host = this._bodyEl.querySelector(".alarm");
@@ -978,6 +1050,8 @@
       h.callService("number", "set_value", { entity_id: id, value: parseFloat(v) });
     } else if (a === "press" && id) {
       h.callService("button", "press", { entity_id: id });
+    } else if (a === "tset") {
+      this._timerSetup();
     } else if (a === "reload") {
       var rl = this._device ? this._dev("button", "reload_page") : null;
       if (rl) h.callService("button", "press", { entity_id: rl }); else window.location.reload();
@@ -1192,6 +1266,9 @@
     settingsOpen: function () { return !!current; },
     displayName: echoDisplayName,
     devEnt: devEnt,
+    ownTimerPrefix: ownTimerPrefix,
+    ownArea: ownArea,
+    areaOf: areaOf,
     // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.
     deviceSlug: function (hass) {
       return Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {

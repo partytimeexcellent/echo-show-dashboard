@@ -10,9 +10,11 @@
 # row of buttons is the same on every view; the `active: true` button marks the page
 # you're on.
 #
-# More than one Echo Show? Each card takes a `devices:` list of per-display overrides,
-# matched against the Kiosk Satellite device name (case-insensitive substring). The
-# example below gives a display named "...Office..." its own timer set.
+# More than one Echo Show? Nothing to add: each display finds its own device entities,
+# timer set (timer.<display>_timer_1..3, created from the settings panel's Timers tab),
+# voice satellite and area from its Kiosk Satellite name. Each card also takes a
+# `devices:` list of per-display overrides (matched against the Kiosk Satellite device
+# name, case-insensitive substring) for when a default isn't right.
 
 # Which Kiosk Satellite device each display is (for the settings panel's device
 # controls). Usually found automatically from the display's name; set it if not.
@@ -77,9 +79,6 @@ views:
             navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings
-        devices:
-          - match: office
-            timer_prefix: office_timer
 
   - title: Clock
     path: timers
@@ -88,7 +87,6 @@ views:
     cards:
       # Alarms (Kiosk Satellite's own, they ring with no network), stopwatch and timers.
       - type: custom:echo-clock-card
-        satellite: assist_satellite.kitchen_kitchen_echo_show_8_assist_satellite  # <-- yours (Kiosk Satellite's own; the alarm pauses while it listens)
         idle_path: /echo-show/weather   # go back here after idle_timeout when no timers run
         idle_timeout: 180
         buttons:
@@ -103,10 +101,6 @@ views:
             navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings            # the settings panel (same on every page)
-        devices:
-          - match: office
-            timer_prefix: office_timer
-            satellite: assist_satellite.office_office_echo_show_8_assist_satellite  # <-- yours
 
   - title: Climate
     path: climate
@@ -135,9 +129,6 @@ views:
             active: true
           - icon: mdi:cog
             action: settings
-        devices:
-          - match: office
-            timer_prefix: office_timer
 
   - title: Media
     path: media
@@ -181,7 +172,4 @@ views:
             navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings
-        devices:
-          - match: office
-            timer_prefix: office_timer
             default_player: null          # follow whatever is playing

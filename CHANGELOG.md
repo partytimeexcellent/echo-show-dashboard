@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0
+
+Every display now works on its own, with nothing to configure, instead of falling back to one display's timers, satellite and room.
+
+- **Timers per display.** Each display uses its own `timer.<display>_timer_1..3` and `input_text.<display>_timer_N_name` (`<display>` = its Kiosk Satellite name slugified) when they exist: the Clock card, the countdown overlay and every page's timer button. Settings › Timers shows **Set up timers for this display** on a display that's still on the shared set and creates them (Home Assistant administrator needed). A `timer_prefix` in the config still wins.
+- **Voice and the timer alarm follow the display.** `echo_timers.jinja` gains `display_slug`, `prefix_for_device`, `slug_for_prefix` and `display_entity`. The voice blueprint finds the display's timers and Dashboard view select from the satellite that heard the command (the `displays` list is now optional overrides), and the timer alarm blueprint, with its inputs left empty, handles every display's timers in one automation, waking and raising the volume of the display the timer belongs to. Update `custom_templates/echo_timers.jinja`.
+- Clock card: the timer alarm pauses while **this display's own** voice satellite listens. The configured `satellite` used to come first, so every display paused when that one listened. Satellites named `assist_satellite.<device>` (no `_assist_satellite` suffix) are found too.
+- Media card: a display starts on the speaker in its own Home Assistant area when exactly one of the `players` is there.
+- Alerts: an `echo_notify` event's `display` and a persistent notification id ending in `@<display>` show on that display only.
+
 ## 1.6.4
 
 - Settings panel: a display is now found from its own Kiosk Satellite name before the dashboard's `echo_show: device` default is used, as the README describes. Before, the default won on every display without a `devices` entry, so the Microphone tile (and the other General/Display controls) on a Kitchen Echo Show 5 changed the Kitchen Echo Show 8.

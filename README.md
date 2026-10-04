@@ -51,7 +51,9 @@ The timers live in Home Assistant, so every screen, automation and voice command
 2. Copy [`homeassistant/custom_templates/echo_timers.jinja`](homeassistant/custom_templates/echo_timers.jinja) to `<config>/custom_templates/`.
 3. Restart Home Assistant.
 
-This creates `timer.echo_timer_1..3`, their name helpers, the alarm volume and tone settings, and the `script.echo_timer_start` / `script.echo_timer_cancel` scripts the timers page uses.
+This creates the shared timer set `timer.echo_timer_1..3`, their name helpers, the alarm volume and tone settings, and the `script.echo_timer_start` / `script.echo_timer_cancel` scripts the timers page uses.
+
+**One timer set per display.** Each display uses its own `timer.<display>_timer_1..3` (and `input_text.<display>_timer_N_name`) when they exist, where `<display>` is its Kiosk Satellite name slugified ("Kitchen Echo Show 5" → `kitchen_echo_show_5_timer_1`). To create them, open the settings panel's **Timers** tab on the display and tap **Set up timers for this display** (Home Assistant only lets an administrator create helpers; a display signed in as another user says what to create under Settings › Helpers). A display without its own set uses the shared one, so its timers also show on every other display without a set.
 
 ### 3. Climate and house mode (optional)
 
@@ -82,8 +84,8 @@ If Home Assistant is down, the thermostat simply keeps its last setpoints.
 
 | Blueprint | |
 |---|---|
-| [**Timer alarm**](homeassistant/blueprints/automation/echo_show/timer_alarm.yaml) | When a timer finishes: wake the screen, show the timers page, raise the volume until it's dismissed. One automation per display. |
-| [**Timer voice commands**](homeassistant/blueprints/automation/echo_show/timer_voice.yaml) | "Set a 10 minute pasta timer", "how long is left?", "pause my timers", "stop". One automation listing every display. |
+| [**Timer alarm**](homeassistant/blueprints/automation/echo_show/timer_alarm.yaml) | When a timer finishes: wake that display's screen, show its timers page, raise its volume until it's dismissed. One automation with the inputs left empty covers every display. |
+| [**Timer voice commands**](homeassistant/blueprints/automation/echo_show/timer_voice.yaml) | "Set a 10 minute pasta timer", "how long is left?", "pause my timers", "stop". One automation; each display uses its own timers, found from the satellite that heard the command. |
 
 Import each one with Settings → Automations → Blueprints → **Import blueprint**, using the file's GitHub URL, then create an automation from it.
 
@@ -98,15 +100,22 @@ Import each one with Settings → Automations → Blueprints → **Import bluepr
 
 ## Several Echo Shows
 
-One dashboard can serve every display. Each card takes a `devices:` list of overrides, matched against the Kiosk Satellite device name (case-insensitive, part of the name is enough):
+One dashboard serves every display, and a new display works on its own with nothing to configure. Each display finds everything from its Kiosk Satellite name ("Kitchen Echo Show 5" → `kitchen_echo_show_5`):
+
+- **Device controls** in the settings panel: its own `switch.kitchen_echo_show_5_*`, `number.*`, … entities.
+- **Timers**: its own `timer.kitchen_echo_show_5_timer_1..3` once they exist (the settings panel's Timers tab creates them), else the shared set.
+- **Voice**: the satellite that heard a command picks the display's timers, and the timer alarm wakes the display the timer belongs to.
+- **Clock**: the timer alarm pauses while this display's own voice satellite listens.
+- **Media**: starts on the speaker in the display's Home Assistant area (when exactly one of the card's `players` is in that area), until a room is picked in the settings panel.
+- **Alerts**: everywhere, unless sent to one display (see echo-notify).
+
+Each card also takes a `devices:` list of overrides for when the defaults aren't right, matched against the Kiosk Satellite device name (case-insensitive, part of the name is enough):
 
 ```yaml
 devices:
   - match: office            # applies on a display whose name contains "office"
     timer_prefix: office_timer
 ```
-
-To give a display its own timers, copy the timer helpers in the package with a new prefix (`office_timer_1..3` and `office_timer_1..3_name`), set `timer_prefix` for it as above, and add it to the voice-commands blueprint.
 
 Testing in a desktop browser? Add `?echo_display=office` to the URL to pretend to be that display (remembered until you set another).
 
@@ -160,12 +169,12 @@ The old name `custom:echo-timer-card` still works and gives the same card.
 | `kiosk` | this display's name | The Kiosk Satellite device name to manage alarms on. Set it (per display, under `devices`) to manage another kiosk or when the name isn't detected. |
 | `alarm_script` | | A script made from Kiosk Satellite's alarms blueprint. Only needed when the display's Home Assistant user isn't an administrator. |
 | `time_format` | HA profile | `12` or `24` for the alarm wheels and list. |
-| `timer_prefix` | `echo_timer` | Uses `timer.<prefix>_1..3` and `input_text.<prefix>_N_name`. |
+| `timer_prefix` | this display's own set, else `echo_timer` | Uses `timer.<prefix>_1..3` and `input_text.<prefix>_N_name`. Leave it out so each display uses its own `<display>_timer` set. |
 | `start_script` / `cancel_script` | `script.echo_timer_start` / `script.echo_timer_cancel` | |
 | `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick picks (minutes) shown until this display has Recents. |
 | `alarm` | `true` | Ring in this browser when a timer finishes. |
 | `tone_entity` | `input_select.echo_timer_alarm_tone` | |
-| `satellite` | | `assist_satellite.*` of this display (Kiosk Satellite's own, e.g. `assist_satellite.<area>_<name>_assist_satellite`): the alarm pauses while it listens or speaks. If it's missing or unavailable, the display's own one is found automatically. |
+| `satellite` | this display's own | `assist_satellite.*` whose listening pauses the alarm. The display's own Kiosk Satellite satellite is found automatically and comes first; this is only used when it can't be found. |
 | `idle_path` / `idle_timeout` | / `180` | Go to this path after this many idle seconds when no timer or stopwatch is running. |
 
 #### Alarms
@@ -215,7 +224,7 @@ A button with `action: timer-settings` opens the alarm settings (volume, tone, t
 | Option | Default | |
 |---|---|---|
 | `players` | **required** | List of `{name, entity, ma_entity, icon}`. `entity` is the Sonos player, `ma_entity` its Music Assistant player. |
-| `default_player` | first player | The room this display controls. When it's quiet and another room is playing, the card shows that room. Set `follow_playing: false` to stop that. |
+| `default_player` | the player in this display's area, else the first | The room this display controls. A display uses the one player in its own Home Assistant area before this; a `default_player` under `devices` or a room picked in the settings panel wins over both. When it's quiet and another room is playing, the card shows that room. Set `follow_playing: false` to stop that. |
 | `ma_config_entry` | | Music Assistant config entry id, needed for the library and Spotify tabs. |
 | `ma_url` / `ma_token` | | Optional live queue straight from the Music Assistant server (one URL or a list to try in order; a long-lived token from MA → Settings → Users → Manage access tokens). Anyone who can open the dashboard can read the token, so use a non-admin MA user. |
 | `quick_favorites` | `8` | Sonos favorites shown on the "nothing playing" page (`0` hides them). |
@@ -249,8 +258,8 @@ Not a card: it activates on any dashboard whose raw config has a top-level `echo
 | Source | |
 |---|---|
 | `nws` | National Weather Service alerts for your HA location (US only). `min_severity`, `exclude: [event names]`, `zone`, `interval`. |
-| `persistent_notifications` | Any persistent notification whose id starts with `echo_` shows full-screen. Put the severity in the id (`echo_severe_leak`) to colour it. Dismissing on screen dismisses it in HA. |
-| `events` | Fire an `echo_notify` event with `title`, `message`, `severity`, `icon`, `id`, `display` (match). Needs the display's HA user to be an administrator. |
+| `persistent_notifications` | Any persistent notification whose id starts with `echo_` shows full-screen. Put the severity in the id (`echo_severe_leak`) to colour it. End the id with `@<display>` (`echo_severe_leak@kitchen_echo_show_5`) to show it on that display only. Dismissing on screen dismisses it in HA. |
+| `events` | Fire an `echo_notify` event with `title`, `message`, `severity`, `icon`, `id`, `display` (part of a display's name, e.g. `kitchen_echo_show_5` or `office`, to show it there only). Needs the display's HA user to be an administrator. |
 
 ```yaml
 # Example: from any automation
@@ -273,6 +282,7 @@ python3 test/validate_ha.py      # check the YAML/Jinja in homeassistant/
 python3 test/climate_plan.py     # scenario tests for the climate plan macro
 node test/smoke.js               # load every card in Chromium (needs Playwright)
 node test/climate.js             # drive the climate card against a fake HA
+node test/timers-own.js          # each display's own timer set and the setup button
 node test/readme-shots.js        # retake the README screenshots in docs/ (also needs @mdi/js)
 ```
 
