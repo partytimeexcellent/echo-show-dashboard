@@ -162,10 +162,10 @@ var PLAN = { source: AWAY ? "away" : HOLD ? "hold" : PRE ? "preheat" : CMODE ===
   period: { profile: "home", start: new Date(now - 3600e3).toISOString(), low: 68, high: 76 }, next: { profile: "sleep", name: "Sleep", start: nextT.toISOString(), low: 64, high: 72 },
   hold: Object.assign({ active: HOLD }, STORE.hold), preheat: { active: PRE, lead: PRE ? 45 : 0 } };
 put(S("sensor.echo_climate_plan", PLAN.source, { plan: PLAN }));
-put(S("person.sean", AWAY ? "not_home" : "home", { friendly_name: "Sean" }));
-put(S("person.christine", "unknown", { friendly_name: "Christine" }));
-put(S("sensor.echo_house_mode", AWAY ? "away" : "home", { occupied: !AWAY, override: /[?&]override/.test(Q) ? "home" : "auto", override_until: "manual", source: /[?&]override/.test(Q) ? "override" : "auto", reason: AWAY ? "Nobody is home" : /[?&]override/.test(Q) ? "Set to Home by hand" : "Sean is home",
-  people_home: AWAY ? [] : ["person.sean"], people_away: AWAY ? ["person.sean"] : [], people_unknown: ["person.christine"], night_start: "22:30", night_end: "06:30" }));
+put(S("person.alex", AWAY ? "not_home" : "home", { friendly_name: "Alex" }));
+put(S("person.sam", "unknown", { friendly_name: "Sam" }));
+put(S("sensor.echo_house_mode", AWAY ? "away" : "home", { occupied: !AWAY, override: /[?&]override/.test(Q) ? "home" : "auto", override_until: "manual", source: /[?&]override/.test(Q) ? "override" : "auto", reason: AWAY ? "Nobody is home" : /[?&]override/.test(Q) ? "Set to Home by hand" : "Alex is home",
+  people_home: AWAY ? [] : ["person.alex"], people_away: AWAY ? ["person.alex"] : [], people_unknown: ["person.sam"], night_start: "22:30", night_end: "06:30" }));
 put(S("sensor.echo_house_settings", new Date().toISOString(), { override: /[?&]override/.test(Q) ? "home" : "auto", override_until: "manual", guests: false, vacation: false, night: true, night_start: "22:30", night_end: "06:30", away_delay: 10, people: [] }));
 function climateHistory() {
   var out = [], t0 = now - 7 * 864e5, low = 64, high = 74, temp = 66;

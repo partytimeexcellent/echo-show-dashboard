@@ -2,6 +2,13 @@
 
 Full-screen Home Assistant dashboard cards for an **Echo Show 8** (or any 1280×800 wall tablet) running as a kiosk, for example with the Kiosk Satellite app. Five pages, one file:
 
+![Weather page](https://raw.githubusercontent.com/partytimeexcellent/echo-show-dashboard/main/docs/weather.png)
+
+| | |
+|---|---|
+| ![Clock page, Alarms tab](https://raw.githubusercontent.com/partytimeexcellent/echo-show-dashboard/main/docs/clock.png) | ![Media page](https://raw.githubusercontent.com/partytimeexcellent/echo-show-dashboard/main/docs/media.png) |
+| ![Climate page](https://raw.githubusercontent.com/partytimeexcellent/echo-show-dashboard/main/docs/climate.png) | ![Settings panel](https://raw.githubusercontent.com/partytimeexcellent/echo-show-dashboard/main/docs/settings.png) |
+
 | | What it does |
 |---|---|
 | **Weather** (`echo-weather-card`) | Big current conditions, sunrise/sunset, AQI and moon, a 7-day chart and a 48-hour chart. Tap the source name to switch between several weather sources. |
@@ -266,6 +273,7 @@ python3 test/validate_ha.py      # check the YAML/Jinja in homeassistant/
 python3 test/climate_plan.py     # scenario tests for the climate plan macro
 node test/smoke.js               # load every card in Chromium (needs Playwright)
 node test/climate.js             # drive the climate card against a fake HA
+node test/readme-shots.js        # retake the README screenshots in docs/ (also needs @mdi/js)
 ```
 
 `test/index.html#weather` (or `#timers`, `#media`, `#climate`, `#climate-schedule`, `#notify`) shows each card against a fake Home Assistant in any browser.
