@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.9.1
+ * Echo Show Dashboard 1.10.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.12.1, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.0, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -5052,7 +5052,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.12.1";
+  var VERSION = "1.13.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -5615,6 +5615,7 @@
       page_size: c.page_size || 60,
       quick_favorites: c.quick_favorites !== undefined ? c.quick_favorites : 8,
       spotify_prefix: c.spotify_prefix || "spotify",
+      local_volume: c.local_volume === "media" ? "media" : "device",
       ma_urls: c.ma_url ? [].concat(c.ma_url) : [],
       ma_token: c.ma_token || null,
     };
@@ -5803,9 +5804,19 @@
     return hit.length === 1 ? hit[0] : null;
   };
 
+  // This display's own player follows the tablet's Device volume (what its volume buttons change),
+  // not Kiosk Satellite's separate Media volume. Returns the number entity, else null.
+  EchoMediaCard.prototype._devVolEnt = function (entityId) {
+    var ES = window.EchoShow, r = this._roomOf(entityId);
+    if (!r || !r.local || this._config.local_volume !== "device" || !ES || !ES.devEnt || !this._localSlug) return null;
+    return ES.devEnt(this._hass, this._localSlug, "number", "volume");
+  };
+
   EchoMediaCard.prototype._volOf = function (entityId) {
     var l = this._volLocal[entityId];
     if (l && (l.drag || l.until > Date.now())) return l.v;
+    var dv = this._devVolEnt(entityId), ds = dv ? this._st(dv) : null;
+    if (ds && !isNaN(parseFloat(ds.state))) return clamp(parseFloat(ds.state) / 100, 0, 1);
     var s = this._st(entityId);
     var v = s ? s.attributes.volume_level : null;
     return typeof v === "number" ? v : 0;
@@ -6006,6 +6017,8 @@
       var r = this._rooms[i];
       if (st[r.entity] !== this._refs[r.entity]) { this._refs[r.entity] = st[r.entity]; changed = true; }
       if (r.ma && st[r.ma] !== this._refs[r.ma]) { this._refs[r.ma] = st[r.ma]; changed = true; }
+      var dvn = r.local ? this._devVolEnt(r.entity) : null;   // the tablet's volume buttons moved
+      if (dvn && st[dvn] !== this._refs[dvn]) { this._refs[dvn] = st[dvn]; changed = true; }
       // Another display saved a new "playing from": only the open queue needs it.
       if (r.src && st[r.src] !== this._refs[r.src]) { this._refs[r.src] = st[r.src]; if (this._quEl && !this._quEl.classList.contains("hidden")) changed = true; }
     }
@@ -6244,6 +6257,8 @@
     d.pend = null;
     d.sent = Date.now();
     for (var e in vols) {
+      var dv = this._devVolEnt(e);
+      if (dv) { this._hass.callService("number", "set_value", { entity_id: dv, value: Math.round(vols[e] * 100) }); continue; }
       var s = this._st(e);
       if (s && Math.abs((s.attributes.volume_level || 0) - vols[e]) < 0.005) continue;
       this._hass.callService("media_player", "volume_set", { entity_id: e, volume_level: vols[e] });
@@ -9677,6 +9692,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.9.1", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.12.1","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.9.1 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.10.0", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.10.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

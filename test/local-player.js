@@ -47,6 +47,19 @@ const path = require("path");
   const grp = await p.evaluate(() => JSON.stringify(calls));
   check(!/kitchen_echo_show_8/.test(grp), "Group all never adds the display to the Sonos group");
 
+  // Volume follows the tablet's Device volume (number.<display>_volume), not the player's own level.
+  await p.goto(url + "#media"); await p.reload(); await p.waitForTimeout(1500);
+  let v = await p.evaluate(() => ({ dev: card._volOf("media_player.kitchen_echo_show_8"), sonos: card._volOf("media_player.kitchen") }));
+  check(Math.abs(v.dev - 0.4) < 0.001 && Math.abs(v.sonos - 0.35) < 0.001, "local volume reads the device volume (0.40), speakers keep their own (" + JSON.stringify(v) + ")");
+  await p.evaluate(() => { calls.length = 0; card._vdrag = { key: "r2", rooms: [card._rooms[2]], pend: { "media_player.kitchen_echo_show_8": 0.65, "media_player.kitchen": 0.5 }, sent: 0 }; card._volFlush(); });
+  const vc = await p.evaluate(() => calls.map((c) => c[0] + "." + c[1] + ":" + (c[2].entity_id || "") + ":" + (c[2].value !== undefined ? c[2].value : c[2].volume_level)).join(" "));
+  check(/number\.set_value:number\.kitchen_echo_show_8_volume:65/.test(vc) && /media_player\.volume_set:media_player\.kitchen:0\.5/.test(vc) && !/volume_set:media_player\.kitchen_echo_show_8/.test(vc), "slider sets Device volume for the display, player volume for speakers (" + vc + ")");
+  await p.evaluate(() => { states["number.kitchen_echo_show_8_volume"] = Object.assign({}, states["number.kitchen_echo_show_8_volume"], { state: "20" }); card.hass = Object.assign({}, card._hass, { states: Object.assign({}, states) }); card._vdrag = null; card._volLocal = {}; });
+  await p.waitForTimeout(200);
+  check(await p.evaluate(() => Math.abs(card._volOf("media_player.kitchen_echo_show_8") - 0.2) < 0.001), "a button press (device volume 20) shows on the slider");
+  await p.evaluate(() => { card.setConfig(Object.assign({}, card._raw, { local_volume: "media" })); card.hass = card._hass; });
+  check(await p.evaluate(() => Math.abs(card._volOf("media_player.kitchen_echo_show_8") - 0.35) < 0.001), "local_volume: media uses the player's own level");
+
   // Playing locally.
   await p.goto(url + "?localplaying#media"); await p.reload(); await p.waitForTimeout(1600);
   txt = await p.evaluate(() => card.shadowRoot.textContent);

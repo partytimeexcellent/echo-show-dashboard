@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.0
+
+- **The display's volume slider follows its volume buttons.** For "This display", the media page's volume slider now reads and sets the tablet's Device volume (`number.<display>_volume`), which is what the physical buttons change. Before it used the player's own level (Kiosk Satellite's Media volume), a separate setting that stayed at 100% while the buttons moved the Device volume. `local_volume: media` brings the old behaviour back.
+
 ## 1.9.1
 
 - Spotify › **Liked songs** was empty: Music Assistant brings Spotify's Liked Songs in as a playlist ("Liked Songs <name>"), not as favourite tracks. The chip now lists that playlist's songs (the first 300), and tapping one plays on from it.
