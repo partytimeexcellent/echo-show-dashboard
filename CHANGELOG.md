@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.0
+
+- **Browse is now Local library and Spotify.** The Sonos favorites tab is gone (they played the wrong thing from some rooms). The library opens on **Radio**, before Playlists, Artists, Albums, Tracks and Podcasts, and the "nothing playing" page's quick row shows the library's radio stations instead of Sonos favorites.
+- **More from Spotify.** The Spotify tab keeps its search and gains **Playlists, Albums, Artists, Liked songs and Recently played**: what you saved from Spotify into Music Assistant (recognised by Spotify's artwork, so local music is left out).
+
 ## 1.8.0
 
 - **Play on this display.** The media page now lists the display's own player (`media_player.<display>`, its Music Assistant player) next to the Sonos speakers, in the Speakers panel, the **Play on** picker and Settings › Media. Each display lists only itself, never the other Echo Shows. It stays on its own: no group button, Group all / Ungroup all skip it, and nothing is ever joined with the Sonos players (they can't take AirPlay streams). `local_player: false` turns it off; `local_name` renames it.

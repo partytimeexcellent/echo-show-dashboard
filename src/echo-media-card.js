@@ -8,7 +8,7 @@
  *  - Now playing: album art left, info + controls right. Without art the info block
  *    re-centres and grows to fill the screen.
  *  - Speakers panel: group / ungroup rooms, per-speaker volume and mute.
- *  - Browse: Sonos favorites, Music Assistant library, Spotify (via Music Assistant).
+ *  - Browse: Music Assistant library (radio first) and Spotify (via Music Assistant).
  *  - Queue: live from the Music Assistant server when ma_url + ma_token are set.
  *  - Goes back to the home view after a timeout, but never while music is playing.
  *
@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.11.0";
+  var VERSION = "1.12.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -301,13 +301,22 @@
 
   // Music Assistant media types shown as filter chips in the Library tab.
   var LIB_TYPES = [
+    { t: "radio", label: "Radio" },
     { t: "playlist", label: "Playlists" },
     { t: "artist", label: "Artists" },
     { t: "album", label: "Albums" },
     { t: "track", label: "Tracks" },
-    { t: "radio", label: "Radio" },
     { t: "podcast", label: "Podcasts" },
   ];
+  // Spotify tab: what has been saved from Spotify into the Music Assistant library.
+  var SPOT_TYPES = [
+    { t: "playlist", label: "Playlists" },
+    { t: "album", label: "Albums" },
+    { t: "artist", label: "Artists" },
+    { t: "liked", label: "Liked songs" },
+    { t: "recent", label: "Recently played" },
+  ];
+  var SPOT_IMG = /scdn\.co|spotifycdn/;
   var TYPE_ICON = { playlist: "mdi:playlist-music", artist: "mdi:account-music", album: "mdi:album", track: "mdi:music-note", radio: "mdi:radio", podcast: "mdi:podcast", audiobook: "mdi:book-music", favorite: "mdi:star" };
   var SEARCH_SECTIONS = [["tracks", "Songs"], ["albums", "Albums"], ["artists", "Artists"], ["playlists", "Playlists"], ["radio", "Radio"], ["podcasts", "Podcasts"], ["audiobooks", "Audiobooks"]];
 
@@ -498,8 +507,8 @@
     self._volLocal = {};     // entity -> { v, until } while dragging / waiting for HA
     self._pendGroup = {};    // room index -> timestamp of a join/unjoin in flight
     self._localSlug = null;  // this display's Kiosk Satellite name; its own player becomes a room of its own
-    self._br = { tab: "fav", ltype: "playlist", sort: "name", q: "", items: [], offset: 0, more: false, loading: false, req: 0, stack: [] };
-    self._favCache = null;
+    self._br = { tab: "lib", ltype: "radio", stype: "playlist", sort: "name", q: "", items: [], offset: 0, more: false, loading: false, req: 0, stack: [] };
+    self._stCache = null;
     // Keep touch gestures inside this card so the kiosk's swipe-between-views doesn't fire.
     ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
       self.addEventListener(type, function (ev) { if (!self._config || self._config.block_swipe) ev.stopPropagation(); });
@@ -1007,23 +1016,22 @@
     var txt = "on " + names.join(", ");
     if (sub.textContent !== txt) sub.textContent = txt;
     this._stopTick();
-    // Quick-start row of Sonos favorites.
+    // Quick-start row of the radio stations in the Music Assistant library.
     var qn = this._config.quick_favorites;
     var qf = this.shadowRoot.querySelector(".qf");
-    if (!qn) { qf.innerHTML = ""; return; }
+    if (!qn || !this._config.ma_config_entry) { qf.innerHTML = ""; return; }
     var self = this;
-    this._loadFavorites().then(function (items) {
-      var list = [];
-      for (var j = 0; j < items.length && list.length < qn; j++) if (!items[j].section) list.push(items[j]);
+    this._loadStations().then(function (items) {
+      var list = items.slice(0, qn);
       var sig = list.map(function (x) { return x.id; }).join("|");
       if (qf.getAttribute("data-sig") === sig) return;
       qf.setAttribute("data-sig", sig);
       self._quick = list;
       if (!list.length) { qf.innerHTML = ""; return; }
-      var h = '<div class="sh">Sonos favorites</div><div class="qfg">';
+      var h = '<div class="sh">Radio</div><div class="qfg">';
       for (var k = 0; k < list.length; k++) h += self._tileHtml(list[k], "q" + k, false);
       qf.innerHTML = h + "</div>";
-    }, function () { /* favorites unavailable */ });
+    }, function () { /* library unavailable */ });
   };
 
   EchoMediaCard.prototype._paintNowPlaying = function (st) {
@@ -1286,6 +1294,7 @@
       // browse
       case "tab": this._br.stack = []; this._br.tab = el.getAttribute("data-t"); this._br.q = ""; this._renderBrowse(true); break;
       case "ltype": this._br.stack = []; this._br.ltype = el.getAttribute("data-t"); this._renderBrowse(true); break;
+      case "stype": this._br.stack = []; this._br.stype = el.getAttribute("data-t"); this._renderBrowse(true); break;
       case "sort": this._br.stack = []; this._br.sort = this._br.sort === "name" ? "last_played_desc" : "name"; this._renderBrowse(true); break;
       case "clear": this._br.stack = []; this._br.q = ""; this._renderBrowse(true); break;
       case "view-back": this._closeView(); break;
@@ -1781,8 +1790,7 @@
     var self = this;
     this._brEl.innerHTML =
       '<div class="ovh">' +
-      '<div class="tab" role="button" data-act="tab" data-t="fav"><ha-icon icon="mdi:star"></ha-icon>Sonos favorites</div>' +
-      '<div class="tab" role="button" data-act="tab" data-t="lib"><ha-icon icon="mdi:bookshelf"></ha-icon>Library</div>' +
+      '<div class="tab" role="button" data-act="tab" data-t="lib"><ha-icon icon="mdi:bookshelf"></ha-icon>Local library</div>' +
       '<div class="tab" role="button" data-act="tab" data-t="spot"><ha-icon icon="mdi:spotify"></ha-icon>Spotify</div>' +
       '<div class="grow"></div><div class="tgt" role="button" data-act="target-pick"></div>' +
       '<div class="ib" role="button" data-act="close"><ha-icon icon="mdi:close"></ha-icon></div></div>' +
@@ -1842,7 +1850,12 @@
       }
       f += '<div class="fc sort" role="button" data-act="sort"><ha-icon icon="' + (br.sort === "name" ? "mdi:sort-alphabetical-ascending" : "mdi:history") + '"></ha-icon>' + (br.sort === "name" ? "A–Z" : "Recent") + "</div>";
     }
-    var fSig = br.tab + "|" + br.ltype + "|" + br.sort + "|" + (br.q ? 1 : 0) + "|" + (vw ? vw.item.id : "");
+    if (br.tab === "spot" && !vw && !br.q) {
+      for (var u = 0; u < SPOT_TYPES.length; u++) {
+        f += '<div class="fc' + (SPOT_TYPES[u].t === br.stype ? " sel" : "") + '" role="button" data-act="stype" data-t="' + SPOT_TYPES[u].t + '">' + SPOT_TYPES[u].label + "</div>";
+      }
+    }
+    var fSig = br.tab + "|" + br.ltype + "|" + br.stype + "|" + br.sort + "|" + (br.q ? 1 : 0) + "|" + (vw ? vw.item.id : "");
     if (this._ovfEl.getAttribute("data-sig") !== fSig) {
       this._ovfEl.innerHTML = f;
       this._ovfEl.setAttribute("data-sig", fSig);
@@ -1876,9 +1889,8 @@
     var p;
     var top = this._view();
     if (top) p = top.item.mtype === "artist" ? this._artistAlbums(top.item) : this._albumTracks(top.item);
-    else if (br.tab === "fav") p = this._loadFavorites().then(function (items) { return { items: items, more: false }; });
     else if (br.tab === "lib") p = br.q ? this._maSearch(br.q, "library") : this._maLibrary(br.ltype, br.offset, br.sort, "");
-    else p = br.q ? this._maSearch(br.q, "spotify") : this._spotifyHome();
+    else p = br.q ? this._maSearch(br.q, "spotify") : this._spotifyLib(br.stype, br.offset);
     p.then(function (res) {
       if (req !== br.req) return;
       br.loading = false;
@@ -1886,6 +1898,8 @@
       br.offset += res.count || res.items.length;
       br.more = !!res.more;
       self._renderGrid(!reset, res.items);
+      // Spotify pages are filtered down from the whole library: keep going while the grid is short.
+      if (br.tab === "spot" && br.more && br.items.length < 18 && (br.chain = (reset ? 0 : br.chain || 0) + 1) < 6) self._loadPage(false);
     }, function (err) {
       if (req !== br.req) return;
       br.loading = false;
@@ -1897,10 +1911,11 @@
   EchoMediaCard.prototype._renderGrid = function (append, added) {
     var br = this._br, h = "";
     if (!append) {
+      if (!br.items.length && br.more) { this._gridEl.innerHTML = '<div class="msg">Loading…</div>'; return; }
       if (!br.items.length) {
         var vn = this._view();
-        var none = vn ? (vn.item.mtype === "artist" ? "No albums found for " : "No songs found on ") + vn.item.title : br.tab === "fav" ? "No Sonos favorites found" : br.q ? "No results for “" + br.q + "”" :
-          br.tab === "spot" ? "Search Spotify to find songs, albums, artists and playlists" : "Nothing here yet";
+        var none = vn ? (vn.item.mtype === "artist" ? "No albums found for " : "No songs found on ") + vn.item.title : br.q ? "No results for “" + br.q + "”" :
+          br.tab === "spot" ? "Nothing from Spotify here yet. Save music in Spotify, or search for it above." : "Nothing here yet";
         this._gridEl.innerHTML = '<div class="msg">' + esc(none) + "</div>";
         return;
       }
@@ -2054,40 +2069,13 @@
 
   // --- data sources ---
 
-  // Sonos favorites (all folders flattened into titled sections). Cached for 10 min.
-  EchoMediaCard.prototype._loadFavorites = function () {
+  // Radio stations in the Music Assistant library (the idle page's quick row). Cached for 10 min.
+  EchoMediaCard.prototype._loadStations = function () {
     var self = this;
-    if (this._favCache && Date.now() - this._favCache.t < 600000) return this._favCache.p;
-    var ent = this._coord().entity;
-    var ws = function (type, id) {
-      return self._hass.callWS({ type: "media_player/browse_media", entity_id: ent, media_content_type: type, media_content_id: id });
-    };
-    var p = ws("favorites", "").then(function (root) {
-      var folders = [], items = [];
-      (root.children || []).forEach(function (c) {
-        if (c.can_expand && c.media_content_type === "favorites_folder") folders.push(c);
-        else if (c.can_play) items.push(c);
-      });
-      // Radio first (most used on a kitchen display), then the rest as Sonos orders them.
-      folders.sort(function (a, b) { return (b.title === "Radio") - (a.title === "Radio"); });
-      return Promise.all(folders.map(function (fo) {
-        return ws(fo.media_content_type, fo.media_content_id).then(function (r) { return { title: fo.title, children: r.children || [] }; }, function () { return { title: fo.title, children: [] }; });
-      })).then(function (groups) {
-        var out = [];
-        if (items.length) groups.unshift({ title: "Favorites", children: items });
-        groups.forEach(function (g) {
-          var kids = g.children.filter(function (c) { return c.can_play; });
-          if (!kids.length) return;
-          if (groups.length > 1) out.push({ section: g.title });
-          kids.forEach(function (c) {
-            out.push({ kind: "sonos", title: c.title, sub: g.title === "Radio" ? "" : "", img: c.thumbnail || "", id: c.media_content_id, ctype: c.media_content_type, mtype: g.title === "Radio" ? "radio" : g.title === "Albums" ? "album" : g.title === "Tracks" ? "track" : "playlist" });
-          });
-        });
-        return out;
-      });
-    });
-    this._favCache = { t: Date.now(), p: p };
-    p.then(null, function () { self._favCache = null; });
+    if (this._stCache && Date.now() - this._stCache.t < 600000) return this._stCache.p;
+    var p = this._maLibrary("radio", 0, "name", "").then(function (r) { return r.items; });
+    this._stCache = { t: Date.now(), p: p };
+    p.then(null, function () { self._stCache = null; });
     return p;
   };
 
@@ -2141,15 +2129,35 @@
     });
   };
 
-  // Spotify tab before searching: the Spotify playlists saved in the library
-  // (recognised by their Spotify-hosted artwork).
-  EchoMediaCard.prototype._spotifyHome = function () {
-    return this._maCall("get_library", { media_type: "playlist", limit: 500, offset: 0, order_by: "sort_name" }).then(function (r) {
-      var list = (r.items || []).filter(function (x) { return x.name && /scdn\.co|spotifycdn/.test(String(x.image || "")); });
-      if (!list.length) return { items: [], more: false };
-      var out = [{ section: "Your Spotify playlists" }];
+  // Spotify tab before searching: what was saved from Spotify into the Music Assistant library
+  // (recognised by Spotify-hosted artwork). "liked" = favourite songs, "recent" = last played.
+  EchoMediaCard.prototype._spotifyLib = function (type, offset) {
+    var self = this, big = 150, sec = "";
+    var data = { media_type: type, limit: big, offset: offset || 0, order_by: "sort_name" };
+    if (type === "liked") { data.media_type = "track"; data.favorite = true; sec = "Liked songs"; }
+    else if (type === "recent") {
+      // Albums, then playlists: what was last played from Spotify.
+      return Promise.all([this._maCall("get_library", { media_type: "album", limit: 60, offset: 0, order_by: "last_played_desc" }),
+        this._maCall("get_library", { media_type: "playlist", limit: 60, offset: 0, order_by: "last_played_desc" })]).then(function (rs) {
+        var out = [];
+        [["Albums", rs[0]], ["Playlists", rs[1]]].forEach(function (g) {
+          var list = (g[1].items || []).filter(function (x) { return x.name && SPOT_IMG.test(String(x.image || "")); }).slice(0, 12);
+          if (!list.length) return;
+          out.push({ section: g[0] });
+          list.forEach(function (x) { out.push(maTile(x)); });
+        });
+        return { items: out, more: false };
+      });
+    }
+    else sec = { playlist: "Your Spotify playlists", album: "Albums", artist: "Artists" }[type] || "";
+    return this._maCall("get_library", data).then(function (r) {
+      var raw = r.items || [];
+      var list = raw.filter(function (x) { return x.name && SPOT_IMG.test(String(x.image || "")); });
+      var out = [];
+      if (list.length && !offset) out.push({ section: sec });
       list.forEach(function (x) { out.push(maTile(x)); });
-      return { items: out, more: false };
+      // A page of mostly local music is nearly empty after filtering: keep paging.
+      return { items: out, count: raw.length, more: raw.length >= big && type !== "playlist" };
     });
   };
 
@@ -2159,9 +2167,7 @@
     var coord = this._coord(), n = this._membersOf(coord).length;
     var where = this._roomName(coord) + (n > 1 ? " +" + (n - 1) : "");
     var p;
-    if (it.kind === "sonos") {
-      p = this._hass.callService("media_player", "play_media", { entity_id: coord.entity, media_content_id: it.id, media_content_type: it.ctype || "favorite_item_id" });
-    } else {
+    {
       if (!coord.ma) { this._toast("No Music Assistant player set for " + this._roomName(coord)); return; }
       // "replace" clears the old queue, so shuffle/next stay within what was just picked.
       var data = { entity_id: coord.ma, media_id: it.id, media_type: it.mtype, enqueue: enqueue || "replace" };

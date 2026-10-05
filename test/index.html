@@ -206,6 +206,16 @@ var hass = {
       var r = Object.assign({ id: m.event_data.id, kiosk: "Kitchen Echo Show 8" }, kiosk(m.event_data));
       setTimeout(function () { (listeners.kiosk_satellite_alarm_result || []).slice().forEach(function (cb) { cb({ event_type: "kiosk_satellite_alarm_result", data: r }); }); }, 250);
       return Promise.resolve({});
+    } if (m.type === "call_service" && m.domain === "music_assistant" && m.service === "get_library") {
+      var gd = m.service_data, sp = "https://i.scdn.co/image/x", lo = "https://assets.fanart.tv/x.jpg", T = gd.media_type;
+      calls.push(["lib", T, gd.favorite ? "fav" : "", gd.order_by]);
+      var mk = function (n, img, i) { return { media_type: T, uri: "library://" + T + "/" + n + i, name: n + " " + i, image: img, artists: [{ name: "Someone" }] }; };
+      var lib = { radio: [mk("KRVM-FM", "http://r/x.png", 1), mk("KWVA", "http://r/y.png", 2)],
+        playlist: [mk("Road Trip", sp, 1), mk("Local Mix", lo, 2), mk("Chill", sp, 3)],
+        album: [mk("Legend", sp, 1), mk("Rumours", lo, 2), mk("Ancient Future", sp, 3)],
+        artist: [mk("Ween", sp, 1), mk("311", lo, 2)],
+        track: gd.favorite ? [mk("Liked Song", sp, 1)] : [mk("A Song", lo, 1)] }[T] || [];
+      return Promise.resolve({ response: { items: lib } });
     } if (m.type === "history/history_during_period") { var o = {}; m.entity_ids.forEach(function (id) { o[id] = id.indexOf("climate.") === 0 ? climateHistory() : roomHistory(id.indexOf("bed") !== -1 ? 66 : 69); }); return Promise.resolve(o); }
     if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
   connection: {
