@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.10.0
+ * Echo Show Dashboard 1.10.1
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.0, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.1, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -5052,7 +5052,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.13.0";
+  var VERSION = "1.13.1";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -7140,6 +7140,17 @@
     return (x.artists || []).map(function (a) { return a.name; }).filter(function (n) { return !!n; }).join(", ");
   }
 
+  // Music Assistant hands back artwork exactly as it was saved. A logo uploaded as
+  // http://<ip>:8123/local/... is blocked on an https dashboard (mixed content), so use the same
+  // path on the page's own origin, which Home Assistant serves over https.
+  function fixImg(u, loc) {
+    loc = loc || window.location;
+    if (typeof u !== "string" || !/^http:\/\//i.test(u) || loc.protocol !== "https:") return u;
+    var a = document.createElement("a");
+    a.href = u;
+    return /^\/(local|api|hacsfiles)\//.test(a.pathname) ? loc.origin + a.pathname + a.search : u;
+  }
+
   function maTile(x) {
     var sub = "";
     if (x.media_type === "track") sub = artistNames(x);
@@ -7148,7 +7159,7 @@
     else if (x.media_type === "radio") sub = "Radio";
     else if (x.media_type === "podcast") sub = x.publisher || "Podcast";
     else if (x.media_type === "audiobook") sub = artistNames(x) || "Audiobook";
-    return { kind: "ma", title: x.name || "Untitled", sub: sub, img: x.image || (x.album && x.album.image) || "", id: x.uri, mtype: x.media_type, artist: x.media_type === "album" ? artistNames(x) : "" };
+    return { kind: "ma", title: x.name || "Untitled", sub: sub, img: fixImg(x.image || (x.album && x.album.image) || ""), id: x.uri, mtype: x.media_type, artist: x.media_type === "album" ? artistNames(x) : "" };
   }
 
   EchoMediaCard.prototype._maLibrary = function (type, offset, sort, q) {
@@ -7419,6 +7430,7 @@
     }
   };
 
+  EchoMediaCard._fixImg = fixImg;
   if (!customElements.get("echo-media-card")) customElements.define("echo-media-card", EchoMediaCard);
   window.customCards = window.customCards || [];
   window.customCards.push({
@@ -9692,6 +9704,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.10.0", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.10.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.10.1", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.1","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.10.1 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

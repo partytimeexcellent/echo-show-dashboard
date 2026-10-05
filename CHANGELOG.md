@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.1
+
+- Radio station logos uploaded to Home Assistant's `/local/` folder showed nothing in Browse: Music Assistant stores them as `http://<ip>:8123/local/...`, which an https dashboard blocks. Artwork from `/local/`, `/api/` and `/hacsfiles/` now loads from the page's own address.
+
 ## 1.10.0
 
 - **The display's volume slider follows its volume buttons.** For "This display", the media page's volume slider now reads and sets the tablet's Device volume (`number.<display>_volume`), which is what the physical buttons change. Before it used the player's own level (Kiosk Satellite's Media volume), a separate setting that stayed at 100% while the buttons moved the Device volume. `local_volume: media` brings the old behaviour back.
