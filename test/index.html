@@ -214,8 +214,12 @@ var hass = {
         playlist: [mk("Road Trip", sp, 1), mk("Local Mix", lo, 2), mk("Chill", sp, 3)],
         album: [mk("Legend", sp, 1), mk("Rumours", lo, 2), mk("Ancient Future", sp, 3)],
         artist: [mk("Ween", sp, 1), mk("311", lo, 2)],
-        track: gd.favorite ? [mk("Liked Song", sp, 1)] : [mk("A Song", lo, 1)] }[T] || [];
+        track: [mk("A Song", lo, 1)] }[T] || [];
+      if (T === "playlist" && gd.search) lib = [{ media_type: "playlist", uri: "library://playlist/7", name: "Liked Songs someone", image: "https://misc.scdn.co/liked-songs/liked-songs-64.png" }];
       return Promise.resolve({ response: { items: lib } });
+    } if (m.type === "media_player/browse_media" && m.media_content_type === "playlist") {
+      calls.push(["browse", m.media_content_type, m.media_content_id]);
+      return Promise.resolve({ children: [1, 2, 3].map(function (i) { return { title: "Someone - Liked Song " + i, can_play: true, media_content_id: "spotify://track/" + i, thumbnail: "" }; }) });
     } if (m.type === "history/history_during_period") { var o = {}; m.entity_ids.forEach(function (id) { o[id] = id.indexOf("climate.") === 0 ? climateHistory() : roomHistory(id.indexOf("bed") !== -1 ? 66 : 69); }); return Promise.resolve(o); }
     if (m.type === "lovelace/config") return Promise.resolve({ echo_notify: { sources: { nws: { enabled: false } } } }); return Promise.resolve({ children: [] }); },
   connection: {

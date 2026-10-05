@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.1
+
+- Spotify › **Liked songs** was empty: Music Assistant brings Spotify's Liked Songs in as a playlist ("Liked Songs <name>"), not as favourite tracks. The chip now lists that playlist's songs (the first 300), and tapping one plays on from it.
+
 ## 1.9.0
 
 - **Browse is now Local library and Spotify.** The Sonos favorites tab is gone (they played the wrong thing from some rooms). The library opens on **Radio**, before Playlists, Artists, Albums, Tracks and Podcasts, and the "nothing playing" page's quick row shows the library's radio stations instead of Sonos favorites.

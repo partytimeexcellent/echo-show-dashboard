@@ -36,7 +36,7 @@ const path = require("path");
   let g = await p.evaluate(() => card._gridEl.textContent);
   check(/Road Trip/.test(g) && /Chill/.test(g) && !/Local Mix/.test(g), "spotify playlists only (local one left out)");
   await p.screenshot({ path: out("browse-spotify") });
-  for (const [t, yes, no] of [["album", "Legend", "Rumours"], ["artist", "Ween", "311"], ["liked", "Liked Song", "A Song"]]) {
+  for (const [t, yes, no] of [["album", "Legend", "Rumours"], ["artist", "Ween", "311"], ["liked", "Liked Song 1", "A Song"]]) {
     await p.evaluate((t) => card._brEl.querySelector('.fc[data-t="' + t + '"]').click(), t);
     await p.waitForTimeout(500);
     g = await p.evaluate(() => card._gridEl.textContent);
@@ -47,7 +47,8 @@ const path = require("path");
   g = await p.evaluate(() => card._gridEl.textContent);
   check(/Albums/.test(g) && /Playlists/.test(g) && /Legend/.test(g), "recently played has albums and playlists");
   const lc = await p.evaluate(() => calls.filter((c) => c[0] === "lib").map((c) => c[1] + (c[2] ? ":fav" : "") + ":" + c[3]).join(","));
-  check(/track:fav/.test(lc) && /album:last_played_desc/.test(lc), "library calls: " + lc);
+  check(/album:last_played_desc/.test(lc), "library calls: " + lc);
+  check(await p.evaluate(() => calls.some((c) => c[0] === "browse" && c[1] === "playlist" && c[2] === "library://playlist/7")), "liked songs: browses the Liked Songs playlist");
 
   // Playing a station goes through Music Assistant.
   await p.evaluate(() => { card._brEl.querySelector('.tab[data-t="lib"]').click(); });

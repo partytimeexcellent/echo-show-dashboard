@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.9.0
+ * Echo Show Dashboard 1.9.1
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.12.0, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.12.1, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -5052,7 +5052,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.12.0";
+  var VERSION = "1.12.1";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -7027,7 +7027,7 @@
     var ma = this._coord().ma;
     for (var i = 0; !ma && i < this._rooms.length; i++) ma = this._rooms[i].ma;
     if (!ma) return Promise.reject(new Error("No Music Assistant player configured"));
-    return this._hass.callWS({ type: "media_player/browse_media", entity_id: ma, media_content_type: "album", media_content_id: al.id }).then(function (r) {
+    return this._hass.callWS({ type: "media_player/browse_media", entity_id: ma, media_content_type: al.mtype === "playlist" ? "playlist" : "album", media_content_id: al.id }).then(function (r) {
       var n = 0;
       var list = (r.children || []).filter(function (c) { return c.can_play; }).map(function (c) {
         // MA titles songs "Artist - Song"
@@ -7169,7 +7169,16 @@
   EchoMediaCard.prototype._spotifyLib = function (type, offset) {
     var self = this, big = 150, sec = "";
     var data = { media_type: type, limit: big, offset: offset || 0, order_by: "sort_name" };
-    if (type === "liked") { data.media_type = "track"; data.favorite = true; sec = "Liked songs"; }
+    if (type === "liked") {
+      // Spotify's Liked Songs arrive in Music Assistant as a playlist ("Liked Songs <user>"), not as favourites.
+      return this._maCall("get_library", { media_type: "playlist", limit: 40, offset: 0, order_by: "sort_name", search: "Liked Songs" }).then(function (r) {
+        var pl = (r.items || []).filter(function (x) { return /^liked songs/i.test(x.name || "") && SPOT_IMG.test(String(x.image || "")); })[0];
+        if (!pl) return { items: [], more: false };
+        return self._albumTracks({ id: pl.uri, mtype: "playlist", title: "Liked Songs" }).then(function (res) {
+          return { items: res.items.slice(0, 300), more: false };
+        });
+      });
+    }
     else if (type === "recent") {
       // Albums, then playlists: what was last played from Spotify.
       return Promise.all([this._maCall("get_library", { media_type: "album", limit: 60, offset: 0, order_by: "last_played_desc" }),
@@ -9668,6 +9677,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.9.0", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.12.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.9.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.9.1", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.12.1","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.9.1 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();
