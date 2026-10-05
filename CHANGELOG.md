@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.0
+
+- **Play on this display.** The media page now lists the display's own player (`media_player.<display>`, its Music Assistant player) next to the Sonos speakers, in the Speakers panel, the **Play on** picker and Settings › Media. Each display lists only itself, never the other Echo Shows. It stays on its own: no group button, Group all / Ungroup all skip it, and nothing is ever joined with the Sonos players (they can't take AirPlay streams). `local_player: false` turns it off; `local_name` renames it.
+
 ## 1.7.0
 
 Every display now works on its own, with nothing to configure, instead of falling back to one display's timers, satellite and room.

@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.10.0";
+  var VERSION = "1.11.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -279,6 +279,7 @@
     ".gbtn ha-icon{--mdc-icon-size:3.2vh;width:3.2vh;height:3.2vh;margin-right:.8vh;}",
     ".gbtn.on{background:linear-gradient(180deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));border-color:transparent;color:var(--es-on-acc,#1a1000);}",
     ".gbtn.busy{opacity:.45;pointer-events:none;}",
+    ".solo .gbtn,.solo .wide[data-act=group-all],.solo .wide[data-act=ungroup-all]{display:none;}",
     ".gbtn.fixed{background:none;border-color:transparent;opacity:.55;pointer-events:none;}",
     ".sfoot{display:flex;align-items:center;margin-top:2vh;flex:0 0 auto;}",
     ".wide{height:8vh;border-radius:4vh;padding:0 3.6vh;display:flex;align-items:center;justify-content:center;font-size:3vh;cursor:pointer;white-space:nowrap;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.1);box-sizing:border-box;margin-right:1.6vh;}",
@@ -496,6 +497,7 @@
     self._manual = false;    // true once the user picked a room (until the view is left)
     self._volLocal = {};     // entity -> { v, until } while dragging / waiting for HA
     self._pendGroup = {};    // room index -> timestamp of a join/unjoin in flight
+    self._localSlug = null;  // this display's Kiosk Satellite name; its own player becomes a room of its own
     self._br = { tab: "fav", ltype: "playlist", sort: "name", q: "", items: [], offset: 0, more: false, loading: false, req: 0, stack: [] };
     self._favCache = null;
     // Keep touch gestures inside this card so the kiosk's swipe-between-views doesn't fire.
@@ -544,6 +546,15 @@
       rooms.push({ i: i, entity: p.entity, ma: p.ma_entity || null, name: p.name || null, icon: p.icon || "mdi:speaker",
         src: p.queue_helper || ("input_text.echo_media_src_" + slug), maId: p.ma_player_id || null });
     }
+    // This display's own player (its Music Assistant entity): a target of its own that is never grouped
+    // with the speakers, and the only Echo Show offered (not the other displays).
+    var lp = c.local_player !== false && this._localSlug ? "media_player." + this._localSlug : null;
+    if (lp && this._hass && this._hass.states[lp]) {
+      var have = false;
+      for (var j = 0; j < rooms.length; j++) if (rooms[j].entity === lp || rooms[j].ma === lp) have = true;
+      if (!have) rooms.push({ i: rooms.length, entity: lp, ma: lp, name: c.local_name || null, icon: "mdi:tablet-dashboard",
+        src: "input_text.echo_media_src_" + this._localSlug, maId: null, local: true });
+    }
     this._rooms = rooms;
     this._timerPrefix = c.timer_prefix || null;
     this._config = {
@@ -576,10 +587,24 @@
 
   EchoMediaCard.prototype.getCardSize = function () { return 12; };
 
+  // Which Kiosk Satellite display this is, to offer its own player as a room.
+  EchoMediaCard.prototype._findLocal = function (hass) {
+    var ES = window.EchoShow, self = this;
+    if (this._localAsked || !ES || !ES.deviceSlug) return;
+    this._localAsked = true;
+    ES.deviceSlug(hass).then(function (slug) {
+      if (!slug || slug === self._localSlug) return;
+      self._localSlug = slug;
+      self._applyProfile(self._prof || null);
+      if (self._built && self._hass) self._update(true);
+    });
+  };
+
   Object.defineProperty(EchoMediaCard.prototype, "hass", {
     set: function (hass) {
       this._hass = hass;
       if (!this._config) return;
+      this._findLocal(hass);
       if (!this._built) { this._build(); this._startIdle(); }
       this._update(false);
       this._maHook();
@@ -639,6 +664,7 @@
 
   // Group leader (Sonos coordinator) of a room.
   EchoMediaCard.prototype._coordOf = function (r) {
+    if (r.local) return r;
     var s = this._st(r.entity);
     var gm = s && s.attributes.group_members;
     if (gm && gm.length && gm[0] !== r.entity) return this._roomOf(gm[0]) || r;
@@ -647,12 +673,13 @@
 
   // Rooms in the same group as the leader (leader first).
   EchoMediaCard.prototype._membersOf = function (coord) {
+    if (coord.local) return [coord];
     var s = this._st(coord.entity);
     var gm = (s && s.attributes.group_members) || [];
     var out = [coord];
     for (var i = 0; i < gm.length; i++) {
       var r = this._roomOf(gm[i]);
-      if (r && out.indexOf(r) === -1) out.push(r);
+      if (r && !r.local && out.indexOf(r) === -1) out.push(r);
     }
     return out;
   };
@@ -728,7 +755,7 @@
     if (!ES || !ES.ownArea || !h) return null;
     var area = ES.ownArea(h), hit = [];
     if (!area) return null;
-    for (var i = 0; i < this._rooms.length; i++) if (ES.areaOf(h, this._rooms[i].entity) === area) hit.push(this._rooms[i]);
+    for (var i = 0; i < this._rooms.length; i++) if (!this._rooms[i].local && ES.areaOf(h, this._rooms[i].entity) === area) hit.push(this._rooms[i]);
     return hit.length === 1 ? hit[0] : null;
   };
 
@@ -1640,12 +1667,14 @@
     if (!full && sig === this._spSig && !this._vdrag) { this._paintSpeakerRows(order, members, coord); this._paintVolumes(); return; }
     if (this._vdrag && !full) { this._paintVolumes(); return; }
     this._spSig = sig;
+    // This display's own player is on its own: no grouping while it is the one shown.
+    this._spEl.classList.toggle("solo", !!coord.local);
     var h = '<div class="ovh"><h2>Speakers</h2><div class="grow"></div><div class="ib" role="button" data-act="close"><ha-icon icon="mdi:close"></ha-icon></div></div><div class="slist">';
     for (var j = 0; j < order.length; j++) {
       var r = order[j];
-      h += '<div class="srow" data-i="' + r.i + '">' +
+      h += '<div class="srow' + (r.local ? " loc" : "") + '" data-i="' + r.i + '">' +
         '<div class="sname" role="button" data-act="pick" data-i="' + r.i + '"><div class="n"></div><div class="s"></div></div>' +
-        volRow("r" + r.i, '<div class="gbtn" role="button" data-act="group" data-i="' + r.i + '"></div>') + "</div>";
+        volRow("r" + r.i, r.local ? "" : '<div class="gbtn" role="button" data-act="group" data-i="' + r.i + '"></div>') + "</div>";
     }
     h += '</div><div class="sfoot">' +
       '<div class="wide" role="button" data-act="group-all"><ha-icon icon="mdi:speaker-multiple"></ha-icon>Group all</div>' +
@@ -1681,9 +1710,11 @@
         else if (a) s = "Paused · " + (a.attributes.media_title || a.attributes.media_channel || "");
         else s = "Idle";
       }
+      if (r.local) s = "This display · " + s;
       var sEl = row.querySelector(".s");
       if (sEl.textContent !== s) sEl.textContent = s;
       var g = row.querySelector(".gbtn"), gh, gc;
+      if (!g) continue;
       if (inG && members.length === 1) { gh = "This room"; gc = "gbtn fixed"; }
       else if (inG) { gh = '<ha-icon icon="mdi:check"></ha-icon>In group'; gc = "gbtn on"; }
       else { gh = '<ha-icon icon="mdi:plus"></ha-icon>Add'; gc = "gbtn"; }
@@ -1695,8 +1726,9 @@
 
   EchoMediaCard.prototype._toggleGroup = function (i) {
     var r = this._rooms[i];
-    if (!r) return;
+    if (!r || r.local) return;
     var coord = this._coord(), members = this._membersOf(coord);
+    if (coord.local) return;
     var inG = members.indexOf(r) !== -1;
     if (inG && members.length === 1) return;
     this._pendGroup[i] = Date.now();
@@ -1714,9 +1746,10 @@
 
   EchoMediaCard.prototype._groupAll = function () {
     var coord = this._coord(), members = this._membersOf(coord), add = [];
+    if (coord.local) return;
     for (var i = 0; i < this._rooms.length; i++) {
       var r = this._rooms[i];
-      if (members.indexOf(r) === -1 && this._available(r)) { add.push(r.entity); this._pendGroup[r.i] = Date.now(); }
+      if (!r.local && members.indexOf(r) === -1 && this._available(r)) { add.push(r.entity); this._pendGroup[r.i] = Date.now(); }
     }
     if (add.length) this._hass.callService("media_player", "join", { entity_id: coord.entity, group_members: add });
     this._renderSpeakers(false);
@@ -1724,6 +1757,7 @@
 
   EchoMediaCard.prototype._ungroupAll = function () {
     var coord = this._coord(), members = this._membersOf(coord);
+    if (coord.local) return;
     for (var i = 0; i < members.length; i++) {
       if (members[i] === coord) continue;
       this._pendGroup[members[i].i] = Date.now();
@@ -2175,9 +2209,10 @@
       else if (a && PLAYING[a.state]) sub = "Playing · " + (a.attributes.media_title || "");
       else if (a) sub = "Paused";
       else sub = "Idle";
+      if (r.local) sub = "This display · " + sub;
       var on = rc === coord;
       h += '<div class="so' + (on ? " cur" : "") + (this._available(r) ? "" : " na") + '" role="button" data-act="target" data-i="' + i + '">' +
-        '<ha-icon icon="' + (on ? "mdi:check-circle" : mem.length > 1 ? "mdi:speaker-multiple" : "mdi:speaker") + '"></ha-icon>' +
+        '<ha-icon icon="' + (on ? "mdi:check-circle" : r.local ? "mdi:tablet-dashboard" : mem.length > 1 ? "mdi:speaker-multiple" : "mdi:speaker") + '"></ha-icon>' +
         '<div class="sx"><div>' + esc(this._roomName(r)) + '</div><div class="ss">' + esc(sub) + "</div></div></div>";
     }
     h += '<div class="so" role="button" data-act="target-group"><ha-icon icon="mdi:tune-vertical-variant"></ha-icon><div class="sx"><div>Group speakers…</div></div></div>';

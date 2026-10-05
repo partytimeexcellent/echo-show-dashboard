@@ -62,6 +62,9 @@ put(S("media_player.kitchen", "playing", Object.assign({}, base, { group_members
 put(S("media_player.living_room", "idle", Object.assign({}, base, { group_members: ["media_player.living_room"] })));
 // a Kiosk Satellite display
 var D = "kitchen_echo_show_8";
+// this display's own Music Assistant player, plus another Echo Show's (which must not be offered)
+put(S("media_player." + D, /[?&]localplaying/.test(location.search) ? "playing" : "idle", Object.assign({}, base, { friendly_name: "Kitchen Echo Show 8", mass_player_type: "player", group_members: [], media_title: /[?&]localplaying/.test(location.search) ? "Local Song" : undefined })));
+put(S("media_player.office_echo_show_8", "idle", Object.assign({}, base, { friendly_name: "Office Echo Show 8", mass_player_type: "player" })));
 put(S("switch." + D + "_mute", "off", { icon: "mdi:microphone-off" }));
 if (/[?&]vsmute/.test(location.search)) put(S("switch." + D + "_vs_mute", /[?&]micoff/.test(location.search) ? "on" : "off"));
 put(S("switch." + D + "_camera_enabled", "on"));

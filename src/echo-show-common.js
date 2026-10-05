@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.0";
+  var VERSION = "1.7.1";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -956,6 +956,9 @@
       h += '<div class="row' + (room === pl.entity ? " sel" : "") + '" role="button" data-a="mroom" data-v="' + esc(pl.entity) + '"><div class="t">' + esc(pl.name || (st && st.attributes.friendly_name) || pl.entity) +
         "<small>" + esc(sub) + '</small></div><div class="r">' + (room === pl.entity ? "✓" : "") + "</div></div>";
     });
+    var lpe = c.local_player !== false && this._device ? "media_player." + this._device : null, lst = lpe ? this._st(lpe) : null;
+    if (lst) h += '<div class="row' + (room === lpe ? " sel" : "") + '" role="button" data-a="mroom" data-v="' + esc(lpe) + '"><div class="t">This display<small>' + esc(lst.state === "playing" ? "Playing \u00b7 " + (lst.attributes.media_title || "") : lst.state === "paused" ? "Paused" : lst.state === "unavailable" ? "Unavailable" : "Idle") +
+      '</small></div><div class="r">' + (room === lpe ? "\u2713" : "") + "</div></div>";
     h += '<div class="row' + (!room ? " sel" : "") + '" role="button" data-a="mroom" data-v=""><div class="t">No fixed room<small>Show whatever is playing</small></div><div class="r">' + (!room ? "✓" : "") + "</div></div>";
     var follow = p.media_follow !== null ? p.media_follow : c.follow_playing !== false;
     h += '<div class="sec">Behaviour</div>' + this._switchRow("Follow what's playing", "When this room is quiet, show another room that's playing", follow, "prefbool", ' data-k="media_follow" data-v="' + (follow ? "0" : "1") + '"');
