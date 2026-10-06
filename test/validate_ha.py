@@ -115,6 +115,7 @@ for f in yaml_files:
 
 check_template((HA / "custom_templates" / "echo_timers.jinja").read_text(), "echo_timers.jinja")
 check_template((HA / "custom_templates" / "echo_climate.jinja").read_text(), "echo_climate.jinja")
+check_template((HA / "custom_templates" / "echo_speech.jinja").read_text(), "echo_speech.jinja")
 
 
 # A `variables:` block must not use another key of the same block: Home Assistant saves UI
@@ -202,6 +203,28 @@ FAKE_STATES.update({"timer.echo_timer_1": "active", "input_text.echo_timer_1_nam
 got = json.loads(render("{% from 'echo_timers.jinja' import slots_json %}{{ slots_json('echo_timer') }}"))
 if [(x["i"], x["s"], x["n"]) for x in got] != [(1, "active", "Pasta"), (2, "done", "Eggs")]:
     failures.append(f"slots_json = {got}")
+
+# Spoken numbers for Assist's answers (echo_speech.jinja).
+env.filters["abs"] = abs
+FAKE_ATTRS = {"sensor.bed": {"unit_of_measurement": "°F"}, "weather.home": {"temperature": 69.4},
+              "climate.t": {"current_temperature": 73.5}}
+FAKE_STATES.update({"sensor.bed": "73.688", "weather.home": "partlycloudy", "climate.t": "heat_cool",
+                    "person.me": "not_home"})
+env.globals.update({"is_number": lambda v: _float(v, None) is not None,
+                    "state_attr": lambda e, a: FAKE_ATTRS.get(e, {}).get(a)})
+speech = {
+    "say_value(73.4, '°F')": "73 degrees", "say_value('1', '°')": "1 degree", "say_value(45.2, '%')": "45 percent",
+    "say_value(1.04, 'kWh')": "1 kilowatt hour", "say_value(2.46, 'kWh')": "2.5 kilowatt hours",
+    "say_value(29.921, 'inHg')": "29.92 inches of mercury", "say_value(12.6, 'widgets')": "13 widgets",
+    "say_value(0.04, 'in')": "0.04 inches", "say_state('sensor.bed')": "74 degrees",
+    "say_state('person.me')": "away", "say_state('climate.t')": "heat and cool",
+    "say_weather('weather.home')": "69 degrees and partly cloudy", "say_climate('climate.t')": "74 degrees",
+}
+for call, want in speech.items():
+    name = call.split("(")[0]
+    got = render("{% from 'echo_speech.jinja' import " + name + " %}{{ " + call + " }}")
+    if got != want:
+        failures.append(f"{call} = {got!r}, expected {want!r}")
 
 print(f"checked {len(yaml_files)} YAML files, {len(cases)} duration phrases")
 if failures:

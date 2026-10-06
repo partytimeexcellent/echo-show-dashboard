@@ -1,0 +1,26 @@
+# Natural spoken answers for Assist ("74 degrees", not "73.688 °F").
+# Copy to <config>/custom_sentences/en/ and custom_templates/echo_speech.jinja to
+# <config>/custom_templates/, then restart Home Assistant (or reload Conversation).
+# Only these answers change; every other answer of these intents keeps Home Assistant's own.
+language: en
+responses:
+  intents:
+    # "What's the bedroom temperature?", "What is the humidity in the kitchen?"
+    HassGetState:
+      default: "{% from 'echo_speech.jinja' import say_state %}{{ say_state(state.entity_id) }}"
+      one: "{% from 'echo_speech.jinja' import say_state %}{{ slots.name | capitalize }} is {{ say_state(state.entity_id) }}"
+      one_yesno: >-
+        {% from 'echo_speech.jinja' import say_state %}
+        {% if query.matched %}Yes{% else %}No, {{ say_state(state.entity_id) }}{% endif %}
+
+    # "What's the weather?"
+    HassGetWeather:
+      default: "{% from 'echo_speech.jinja' import say_weather %}{{ say_weather(state.entity_id) }}"
+
+    # "What's the temperature in the living room?" (thermostat)
+    HassClimateGetTemperature:
+      default: "{% from 'echo_speech.jinja' import say_climate %}{{ say_climate(state.entity_id) }}"
+
+    # "Set the thermostat to 72"
+    HassClimateSetTemperature:
+      default: "{% from 'echo_speech.jinja' import say_value %}Thermostat set to {{ say_value(slots.temperature, '°') }}"

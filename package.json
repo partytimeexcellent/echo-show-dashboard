@@ -1,6 +1,6 @@
 {
   "name": "echo-show-dashboard",
-  "version": "1.10.1",
+  "version": "1.11.0",
   "description": "Full-screen Home Assistant dashboard cards for Echo Show 8 (and other 1280x800) kiosk tablets: weather, clock (alarms, stopwatch, timers), Sonos media, thermostat and alerts.",
   "homepage": "https://github.com/partytimeexcellent/echo-show-dashboard",
   "license": "MIT",
