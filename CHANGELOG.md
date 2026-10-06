@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.14.0
+
+- Settings › General › **Media follows Device volume** (per display, off by default): moving the Device or the Media volume moves the other to the same level, from the volume buttons, the sliders, Music Assistant or an automation. The device volume has about 15 steps, so Media lands on the nearest one. It works while the dashboard is open on that display.
+
 ## 1.13.1
 
 - Settings › Media › **Volume slider follows the buttons**: per display, picks whether the media page's slider for "This display" sets the device volume (the default since 1.10.0, what the volume buttons change) or Kiosk Satellite's separate media volume. Same as the card's `local_volume`, without editing YAML.

@@ -98,7 +98,7 @@ Import each one with Settings → Automations → Blueprints → **Import bluepr
 
 ### 6. Volume buttons (optional)
 
-The [Echo Volume Buttons](ks-plugin/README.md) Kiosk Satellite plugin takes over the hardware volume buttons: device volume normally, the assistant's volume while it's answering, faster while held. The dashboard shows the new level at the top of the screen whenever a display's volume changes (Settings → Display turns that off). Install the plugin on each display from [`ks-plugin/dist/`](ks-plugin/dist/) and turn on Kiosk → **Disable volume buttons**; see its README.
+The [Echo Volume Buttons](ks-plugin/README.md) Kiosk Satellite plugin takes over the hardware volume buttons: device volume normally, the assistant's volume while it's answering, faster while held. The dashboard shows the new level at the top of the screen whenever a display's volume changes (Settings → Display turns that off). To keep a display's Media volume at its Device volume, turn on Settings → General → **Media follows Device volume**. Install the plugin on each display from [`ks-plugin/dist/`](ks-plugin/dist/) and turn on Kiosk → **Disable volume buttons**; see its README.
 
 ---
 

@@ -36,6 +36,37 @@ const path = require("path");
   await page.waitForTimeout(450);
   check("off in settings", await shown(), "");
   await page.evaluate(() => window.EchoShow.prefs.set("volume_hud", null));
+
+  // Media follows Device volume (off by default).
+  const sets = () => page.evaluate(() => calls.filter((c) => c[0] === "number" && c[1] === "set_value").map((c) => c[2].entity_id.replace("number.kitchen_echo_show_8_", "") + "=" + c[2].value).join(" "));
+  await page.evaluate(() => { calls.length = 0; });
+  await page.waitForTimeout(2000);
+  await change("volume", 53);
+  await page.waitForTimeout(450);
+  check("off: media left alone", await sets(), "");
+  await page.evaluate(() => window.EchoShow.prefs.set("volume_link", true));
+  check("turning it on brings media to the device level", await sets(), "media_volume=53");
+  await page.evaluate(() => { calls.length = 0; });
+  await change("media_volume", 53);   // the follow-up landing
+  await page.waitForTimeout(450);
+  check("no echo back", await sets(), "");
+  await change("volume", 60);
+  await page.waitForTimeout(450);
+  check("device moves media", await sets(), "media_volume=60");
+  check("level bar shows the device change", await shown(), "Device volume 60%");
+  await change("media_volume", 60);
+  await page.waitForTimeout(450);
+  check("...not the media following it", await shown(), "Device volume 60%");
+  await page.evaluate(() => { calls.length = 0; });
+  await page.waitForTimeout(3100);
+  await change("media_volume", 30);
+  await page.waitForTimeout(450);
+  check("media moves device", await sets(), "volume=30");
+  await page.evaluate(() => { calls.length = 0; });
+  await change("volume", "unavailable");
+  await page.waitForTimeout(450);
+  check("an unavailable device leaves media alone", await sets(), "");
+  await page.evaluate(() => window.EchoShow.prefs.set("volume_link", null));
   check("no page errors", errors.join("; "), "");
   await browser.close();
   process.exit(failed ? 1 : 0);

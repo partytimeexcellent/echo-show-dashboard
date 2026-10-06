@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.8.1";
+  var VERSION = "1.9.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -79,6 +79,7 @@
     clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
     climate_tab: null,           // Climate page tab last used here (now/schedule/comfort/insights)
     volume_hud: "on",            // show volume changes on screen (on/off)
+    volume_link: false,          // keep this display's Media volume equal to its Device volume
     media_device_volume: null,   // media page slider for "This display" sets the Device volume; null = card config
   };
   var Prefs = {
@@ -640,6 +641,10 @@
       if (vol) h += this._slider(vol, "mdi:volume-high", "Device", this._numVal(vol), 0, 100, "%", "number");
       if (avol) h += this._slider(avol, "mdi:account-voice", "Assistant", this._numVal(avol), 0, 100, "%", "number");
       if (mvol) h += this._slider(mvol, "mdi:music-note", "Media", this._numVal(mvol), 0, 100, "%", "number");
+      if (vol && mvol) {
+        var lk = !!Prefs.get("volume_link");
+        h += this._switchRow("Media follows Device volume", lk ? "Moving either one moves the other" : "Media is its own share of the device volume", lk, "prefbool", ' data-k="volume_link" data-v="' + (lk ? "0" : "1") + '"');
+      }
     }
     if (sens) {
       var ss = this._st(sens);
@@ -1313,7 +1318,18 @@
   };
   if (!customElements.get("echo-volume-hud")) customElements.define("echo-volume-hud", EchoVolumeHud);
 
-  var hud = { slug: undefined, seen: {}, el: null };
+  var hud = { slug: undefined, seen: {}, el: null, sent: {} };
+  // "Media follows Device volume" (Settings › General): when one of the two changes, set the other
+  // to the same level. The device volume has about 15 steps, so 50 becomes 53 and media follows that.
+  function linkVolume(hass, changedId, otherId, v) {
+    if (!Prefs.get("volume_link") || !otherId || !hass.states[otherId] || v === null || isNaN(v)) return;
+    var o = num(hass.states[otherId].state), target = Math.round(v);
+    if (o === null || Math.abs(o - target) < 1) return;
+    var s = hud.sent[changedId];
+    if (s && s.v === target && Date.now() - s.t < 3000) return;   // the echo of our own set
+    hud.sent[otherId] = { v: target, t: Date.now() };
+    hass.callService("number", "set_value", { entity_id: otherId, value: target });
+  }
   function watchVolume() {
     var hass = findHass();
     if (!hass || !hass.states) return;
@@ -1333,12 +1349,21 @@
       var v = num(st.state);
       if (v === null || num(prev.state) === null) return;
       if (Math.abs(Date.now() - Date.parse(st.last_changed)) > 10000) return;
+      if (ch.s !== "assistant_volume") linkVolume(hass, id, devEnt(hass, hud.slug, "number", ch.s === "volume" ? "media_volume" : "volume"), v);
+      var echo = hud.sent[id];
+      if (echo && echo.v === Math.round(v) && Date.now() - echo.t < 3000) return;   // the linked one following
       if (current || document.hidden || Prefs.get("volume_hud") === "off") return;
       if (!hud.el || !hud.el.isConnected) { hud.el = document.createElement("echo-volume-hud"); document.body.appendChild(hud.el); }
       hud.el.show(ch, v);
     });
   }
   setInterval(watchVolume, 200);
+  // Turning the link on brings Media to the Device level straight away.
+  window.addEventListener("echo-show-prefs", function (ev) {
+    if (!ev.detail || ev.detail.key !== "volume_link" || !ev.detail.value) return;
+    var hass = findHass(), dv = hass && hud.slug ? devEnt(hass, hud.slug, "number", "volume") : null;
+    if (dv && hass.states[dv]) linkVolume(hass, dv, devEnt(hass, hud.slug, "number", "media_volume"), num(hass.states[dv].state));
+  });
 
   // ---------- public API ----------
   window.EchoShow = {
