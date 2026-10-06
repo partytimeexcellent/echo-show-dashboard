@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.15.0
+
+- **New "Nothing playing" page.** The media page's idle screen is redesigned: a record with its tonearm parked, glowing in the theme's accent colour, over the room's name and the Browse music and Speakers buttons, with the radio stations in a 3×2 grid beside it (up to six, each with a play badge) and an "All stations" link that opens Browse on Radio. Without Music Assistant stations, the record and buttons sit centred.
 ## 1.14.0
 
 - Settings › General › **Media follows Device volume** (per display, off by default): moving the Device or the Media volume moves the other to the same level, from the volume buttons, the sliders, Music Assistant or an automation. The device volume has about 15 steps, so Media lands on the nearest one. It works while the dashboard is open on that display.

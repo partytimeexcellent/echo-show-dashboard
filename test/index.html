@@ -58,7 +58,7 @@ put(S("input_text.echo_timer_3_name", ""));
 put(S("input_select.echo_timer_alarm_tone", "Chime", { options: ["Chime", "Marimba", "Bells"] }));
 put(S("input_number.echo_timer_alarm_volume", "80", { min: 10, max: 100, step: 5 }));
 var base = { volume_level: 0.35, is_volume_muted: false, supported_features: 8321599 };
-put(S("media_player.kitchen", "playing", Object.assign({}, base, { group_members: ["media_player.kitchen"], media_title: "Answer to Your Name", media_artist: "Protoje", media_album_name: "Ancient Future", media_duration: 234, media_position: 81, media_position_updated_at: new Date().toISOString(), entity_picture: "art.jpg" })));
+put(S("media_player.kitchen", /[?&]idle/.test(location.search) ? "idle" : "playing", Object.assign({}, base, { group_members: ["media_player.kitchen"], media_title: "Answer to Your Name", media_artist: "Protoje", media_album_name: "Ancient Future", media_duration: 234, media_position: 81, media_position_updated_at: new Date().toISOString(), entity_picture: "art.jpg" })));
 put(S("media_player.living_room", "idle", Object.assign({}, base, { group_members: ["media_player.living_room"] })));
 // a Kiosk Satellite display
 var D = "kitchen_echo_show_8";
@@ -215,6 +215,9 @@ var hass = {
         album: [mk("Legend", sp, 1), mk("Rumours", lo, 2), mk("Ancient Future", sp, 3)],
         artist: [mk("Ween", sp, 1), mk("311", lo, 2)],
         track: [mk("A Song", lo, 1)] }[T] || [];
+      if (T === "radio" && /[?&]radio/.test(location.search)) lib = [["KEXP 90.3 Seattle", "#111", "#f6a019"], ["KLCC Eugene", "#0b5aa2", "#fff"], ["KRVM Eugene", "#f2e600", "#d0112b"], ["KWVA Eugene", "#000", "#fff"], ["WWOZ New Orleans", "#8b2a8f", "#f3c623"], ["KUOW Seattle", "#c8102e", "#fff"], ["Jazz24", "#1d1d1d", "#4fc3f7"]].map(function (x, i) {
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="' + x[1] + '"/><text x="50" y="60" font-family="Arial" font-weight="bold" font-size="22" text-anchor="middle" fill="' + x[2] + '">' + x[0].split(" ")[0] + "</text></svg>";
+        return { media_type: "radio", uri: "library://radio/" + i, name: x[0], image: "data:image/svg+xml," + encodeURIComponent(svg) }; });
       if (T === "radio" && /[?&]somalib/.test(location.search)) lib = lib.concat([mk("SomaFM: Drone Zone", "http://r/dz.png", ""), mk("SomaFM: Groove Salad", "http://r/gs.png", "")]);
       if (T === "radio" && gd.search) lib = lib.filter(function (x) { return x.name.toLowerCase().indexOf(gd.search.toLowerCase()) !== -1; });
       if (T === "playlist" && gd.search) lib = [{ media_type: "playlist", uri: "library://playlist/7", name: "Liked Songs someone", image: "https://misc.scdn.co/liked-songs/liked-songs-64.png" }];
@@ -246,6 +249,7 @@ var CONFIGS = {
   climate: ["echo-climate-card", { entity: "climate.thermostat", outdoor: "weather.pirate", buttons: buttons.map(function (b, i) { return i === 3 ? Object.assign({ active: true }, b) : b; }) }],
   media: ["echo-media-card", { players: [{ name: "Kitchen", entity: "media_player.kitchen" }, { name: "Living Room", entity: "media_player.living_room" }], default_player: "media_player.kitchen", buttons: buttons, quick_favorites: 0 }],
 };
+if (/[?&]radio/.test(location.search)) Object.assign(CONFIGS.media[1], { ma_config_entry: "ma", quick_favorites: 8 });
 var DASH = { echo_notify: { sound: true, sources: { nws: { enabled: false } } }, views: Object.keys(CONFIGS).map(function (k) { return { type: "panel", cards: [Object.assign({ type: "custom:" + CONFIGS[k][0] }, CONFIGS[k][1])] }; }) };
 DASH.views[0].cards[0].sources.push({ name: "Backyard", temperature: "sensor.backyard" });
 put(S("sensor.backyard", "57.2"));

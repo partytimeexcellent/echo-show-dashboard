@@ -29,7 +29,7 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
   sorted: never use a key from the same `variables:` block (split into steps), and quote YAML-boolean keys (`off:`).
   `test/climate_plan.py` has scenario tests for the macro.
 - `test/`: `index.html` is a fake HA (`#climate[-schedule|-comfort|-insights|-house|-day]`, `?heating`, `?hold`, `?away`, `?rooms`, `?filter`, `?override`, `?mode=heat`) (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
-  `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
+  `?ringing`, `?noalarms`, `?idle` (media idle page), `?radio` (Music Assistant stations)) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
   `alarm-list.js` drives the Clock Alarms tab (volume row, swipe/Edit delete, Undo); `alarms-settings.js` drives the settings Alarms tab (fake `shell_command.echo_kiosk`; `?notones`, `?noshell`);
   `smoke.js` loads every card in Playwright; `volume-hud.js` checks the volume level bar; `timers-own.js` checks per-display timer sets (`?ownset`, `?nonadmin`); `validate_ha.py` checks the YAML/Jinja.
 

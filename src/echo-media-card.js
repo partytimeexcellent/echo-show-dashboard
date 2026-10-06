@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.14.1";
+  var VERSION = "1.15.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -166,16 +166,48 @@
     ".idle{position:absolute;left:0;top:0;right:0;bottom:0;display:none;flex-direction:column;padding:1vh 1vh 0;box-sizing:border-box;}",
     ".main.isidle .np{display:none;}",
     ".main.isidle .idle{display:flex;}",
-    ".ic{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}",
-    ".ic .big{--mdc-icon-size:13vh;width:13vh;height:13vh;opacity:.3;}",
-    ".ic h2{margin:1.6vh 0 0;font-size:5vh;font-weight:400;}",
-    ".ic .sub{font-size:2.8vh;opacity:.55;margin-top:1vh;}",
-    ".go{margin-top:3.4vh;height:9vh;border-radius:4.5vh;padding:0 4.4vh;background:linear-gradient(180deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));color:var(--es-on-acc,#1a1000);display:flex;align-items:center;justify-content:center;font-size:3.4vh;font-weight:500;cursor:pointer;}",
+    ".ibody{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;position:relative;}",
+    ".idle.hasq .ibody{justify-content:space-between;padding:0 1.5vh 0 3vh;}",
+    /* hero: a record with its tonearm parked, the room, and Browse / Speakers */
+    ".hero{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;text-align:center;}",
+    ".idle.hasq .hero{width:62vh;}",
+    ".disc{position:relative;width:34vh;height:34vh;margin:0 4vh 3.4vh 0;}",
+    ".glow{position:absolute;left:-30%;top:-30%;right:-30%;bottom:-30%;border-radius:50%;background:radial-gradient(closest-side,rgba(var(--es-acc-rgb,255,159,10),.5) 55%,rgba(var(--es-acc-rgb,255,159,10),.16) 76%,rgba(var(--es-acc-rgb,255,159,10),0));animation:esglow 7s ease-in-out infinite alternate;}",
+    "@keyframes esglow{from{opacity:.55;transform:scale(.94);}to{opacity:1;transform:scale(1.04);}}",
+    ".rec{position:absolute;left:0;top:0;right:0;bottom:0;border-radius:50%;" +
+      "background:linear-gradient(135deg,rgba(255,255,255,0) 28%,rgba(255,255,255,.13) 44%,rgba(255,255,255,0) 56%)," +
+      "linear-gradient(315deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.07) 45%,rgba(255,255,255,0) 54%)," +
+      "repeating-radial-gradient(circle at 50% 50%,#121419 0,#121419 .55vh,#1c1f27 .75vh,#121419 .95vh);" +
+      "box-shadow:0 3vh 7vh rgba(0,0,0,.6),0 0 0 .35vh rgba(255,255,255,.06);}",
+    ".lbl{position:absolute;left:32%;top:32%;width:36%;height:36%;border-radius:50%;background:linear-gradient(160deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));box-shadow:inset 0 0 0 .5vh rgba(0,0,0,.18),inset 0 0 0 1.6vh rgba(255,255,255,.1);}",
+    ".lbl:after{content:'';position:absolute;left:50%;top:50%;width:2.2vh;height:2.2vh;margin:-1.1vh 0 0 -1.1vh;border-radius:50%;background:#0b0e15;box-shadow:0 0 0 .3vh rgba(0,0,0,.25);}",
+    ".arm{position:absolute;right:-5.6vh;top:-1vh;width:6vh;height:6vh;}",
+    ".arm .pv{position:absolute;left:0;top:0;width:6vh;height:6vh;border-radius:50%;background:radial-gradient(circle at 38% 35%,#eef1f6,#9aa3b2 55%,#5d6574);box-shadow:0 .8vh 1.6vh rgba(0,0,0,.5);}",
+    ".arm .rod{position:absolute;left:2.45vh;top:3vh;width:1.1vh;height:26vh;border-radius:.55vh;background:linear-gradient(90deg,#7c8494,#e9edf3 45%,#8a92a1);transform-origin:50% 0;transform:rotate(-3deg);box-shadow:.6vh .8vh 1.4vh rgba(0,0,0,.4);}",
+    ".arm .hs{position:absolute;left:-.9vh;bottom:-3.6vh;width:2.9vh;height:4.4vh;border-radius:.6vh;background:linear-gradient(90deg,#3a404c,#6b7383);transform:rotate(-14deg);}",
+    ".kick{font-size:2.3vh;letter-spacing:.18em;text-transform:uppercase;color:var(--es-hi2,#ffc266);opacity:.9;}",
+    ".hn{margin:.8vh 0 0;font-size:6.6vh;font-weight:500;line-height:1.1;max-width:62vh;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    ".idle .sub{font-size:2.6vh;opacity:.55;margin-top:1vh;max-width:62vh;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    ".acts{display:flex;align-items:center;justify-content:center;margin-top:3.4vh;}",
+    ".go{height:9vh;border-radius:4.5vh;padding:0 4.4vh;background:linear-gradient(180deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));color:var(--es-on-acc,#1a1000);display:flex;align-items:center;justify-content:center;font-size:3.4vh;font-weight:500;cursor:pointer;}",
+    ".acts .go{box-shadow:0 1.2vh 3vh rgba(var(--es-acc-rgb,255,159,10),.28);}",
     ".go ha-icon{--mdc-icon-size:4.4vh;width:4.4vh;height:4.4vh;margin-right:1.4vh;}",
-    ".qf{width:100%;flex:0 0 auto;padding-bottom:1vh;}",
-    ".qf .sh{margin:0 0 1.6vh;}",
-    ".qfg{display:grid;grid-template-columns:repeat(8,1fr);grid-gap:2vh;}",
-    ".qf:empty{display:none;}",
+    ".acts .go.alt{margin-left:1.6vh;padding:0;width:9vh;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);color:#fff;box-shadow:none;box-sizing:border-box;}",
+    ".acts .go.alt ha-icon{margin:0;}",
+    /* radio: up to six stations on the right */
+    ".qf{flex:0 0 auto;display:none;}",
+    ".idle.hasq .qf{display:block;}",
+    ".qh{display:flex;align-items:center;margin-bottom:2vh;}",
+    ".qh .sh{margin:0;flex:1 1 auto;}",
+    ".qh .all{display:flex;align-items:center;font-size:2.4vh;opacity:.7;cursor:pointer;padding:1vh 0 1vh 2vh;}",
+    ".qh .all ha-icon{--mdc-icon-size:3vh;width:3vh;height:3vh;}",
+    ".qh .all:active{opacity:1;}",
+    ".qfg{display:grid;grid-template-columns:repeat(3,22vh);grid-gap:2.6vh 2.6vh;}",
+    ".qf .ti{border-radius:2.2vh;box-shadow:0 1.4vh 3vh rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.08);}",
+    ".qf .ti:before{content:'';position:absolute;right:1.2vh;bottom:1.2vh;width:5.6vh;height:5.6vh;border-radius:50%;background:rgba(8,12,24,.72);z-index:1;}",
+    ".qf .ti:after{content:'';position:absolute;right:3.05vh;bottom:2.75vh;width:0;height:0;border-style:solid;border-width:1.25vh 0 1.25vh 2vh;border-color:transparent transparent transparent #fff;z-index:2;}",
+    ".qf .tt{font-size:2.5vh;margin-top:1.3vh;-webkit-line-clamp:1;text-align:left;}",
+    ".qf .ts{display:none;}",
     /* ---- overlays ---- */
     ".ov{position:absolute;left:0;top:0;right:0;bottom:0;z-index:5;border-radius:3vh;background:#0c1224;border:1px solid rgba(255,255,255,.08);box-shadow:0 2vh 6vh rgba(0,0,0,.5);display:flex;flex-direction:column;padding:2.4vh 2.8vh;box-sizing:border-box;}",
     ".hidden{display:none !important;}",
@@ -841,11 +873,11 @@
       (extraBtn || "") + "</div>";
   }
 
-  function headerHtml(withQueue) {
+  function headerHtml(withQueue, noBrowse) {
     return '<div class="hdr"><div class="chip" role="button" data-act="speakers"><ha-icon icon="mdi:speaker"></ha-icon><span class="rn"></span><span class="rc"></span><ha-icon class="chev" icon="mdi:chevron-down"></ha-icon></div>' +
       '<div class="grow"></div>' +
       (withQueue ? '<div class="ib" role="button" data-act="queue"><ha-icon icon="mdi:playlist-music"></ha-icon></div>' : "") +
-      '<div class="ib" role="button" data-act="browse"><ha-icon icon="mdi:music-box-multiple-outline"></ha-icon></div></div>';
+      (noBrowse ? "" : '<div class="ib" role="button" data-act="browse"><ha-icon icon="mdi:music-box-multiple-outline"></ha-icon></div>') + "</div>";
   }
 
   EchoMediaCard.prototype._build = function () {
@@ -872,10 +904,13 @@
       volRow("main", '<div class="ib last" role="button" data-act="speakers"><ha-icon icon="mdi:tune-vertical-variant"></ha-icon></div>') +
       "</div></div>" +
       // nothing playing
-      '<div class="idle">' + headerHtml() +
-      '<div class="ic"><ha-icon class="big" icon="mdi:speaker-off"></ha-icon><h2>Nothing playing</h2><div class="sub"></div>' +
-      '<div class="go" role="button" data-act="browse"><ha-icon icon="mdi:music-box-multiple-outline"></ha-icon>Browse music</div></div>' +
-      '<div class="qf"></div></div>' +
+      '<div class="idle">' + headerHtml(false, true) + '<div class="ibody">' +
+      '<div class="hero"><div class="disc"><div class="glow"></div><div class="rec"><div class="lbl"></div></div>' +
+      '<div class="arm"><div class="pv"></div><div class="rod"><div class="hs"></div></div></div></div>' +
+      '<div class="kick">Nothing playing</div><div class="hn"></div><div class="sub"></div>' +
+      '<div class="acts"><div class="go" role="button" data-act="browse"><ha-icon icon="mdi:music-box-multiple-outline"></ha-icon>Browse music</div>' +
+      '<div class="go alt" role="button" data-act="speakers"><ha-icon icon="mdi:speaker-multiple"></ha-icon></div></div></div>' +
+      '<div class="qf"></div></div></div>' +
       // overlays
       // timer countdown: below the panels (z-index 5), so browse / speakers / queue cover it
       '<echo-timer-overlay hidden auto-pos="media" style="z-index:4"></echo-timer-overlay>' +
@@ -1034,28 +1069,28 @@
   };
 
   EchoMediaCard.prototype._paintIdle = function (members) {
-    var names = [];
+    var self = this, root = this.shadowRoot, names = [];
     for (var i = 0; i < members.length; i++) names.push(this._roomName(members[i]));
-    var sub = this.shadowRoot.querySelector(".ic .sub");
-    var txt = "on " + names.join(", ");
-    if (sub.textContent !== txt) sub.textContent = txt;
+    var set = function (sel, v) { var el = root.querySelector(sel); if (el.textContent !== v) el.textContent = v; };
+    set(".idle .hn", names[0] || "");
+    set(".idle .sub", names.length > 1 ? "Grouped with " + names.slice(1).join(", ") : "Pick a station or browse your music");
     this._stopTick();
-    // Quick-start row of the radio stations in the Music Assistant library.
-    var qn = this._config.quick_favorites;
-    var qf = this.shadowRoot.querySelector(".qf");
-    if (!qn || !this._config.ma_config_entry) { qf.innerHTML = ""; return; }
-    var self = this;
-    this._loadStations().then(function (items) {
-      var list = items.slice(0, qn);
+    // Up to six radio stations from the Music Assistant library, beside the record.
+    var qn = Math.min(this._config.quick_favorites || 0, 6);
+    var idle = root.querySelector(".idle"), qf = root.querySelector(".qf");
+    var show = function (list) {
       var sig = list.map(function (x) { return x.id; }).join("|");
       if (qf.getAttribute("data-sig") === sig) return;
       qf.setAttribute("data-sig", sig);
       self._quick = list;
+      idle.classList.toggle("hasq", list.length > 0);
       if (!list.length) { qf.innerHTML = ""; return; }
-      var h = '<div class="sh">Radio</div><div class="qfg">';
+      var h = '<div class="qh"><div class="sh">Radio</div><div class="all" role="button" data-act="radio-all">All stations<ha-icon icon="mdi:chevron-right"></ha-icon></div></div><div class="qfg">';
       for (var k = 0; k < list.length; k++) h += self._tileHtml(list[k], "q" + k, false);
       qf.innerHTML = h + "</div>";
-    }, function () { /* library unavailable */ });
+    };
+    if (!qn || !this._config.ma_config_entry) { show([]); return; }
+    this._loadStations().then(function (items) { show(items.slice(0, qn)); }, function () { /* library unavailable */ });
   };
 
   EchoMediaCard.prototype._paintNowPlaying = function (st) {
@@ -1339,6 +1374,7 @@
       case "mute": this._toggleMute(el.getAttribute("data-k")); break;
       case "speakers": this._openSpeakers(); break;
       case "browse": this._openBrowse(); break;
+      case "radio-all": this._openBrowse("radio"); break;
       case "queue": this._openQueue(); break;
       case "qitem": this._queuePlayFrom(parseInt(el.getAttribute("data-k"), 10)); break;
       case "qplay": this._maPlayItem(el.getAttribute("data-k"), el.getAttribute("data-t")); break;
@@ -1841,12 +1877,14 @@
 
   // ---------- browse ----------
 
-  EchoMediaCard.prototype._openBrowse = function () {
+  EchoMediaCard.prototype._openBrowse = function (tab) {
+    var br = this._br, reset = !br.items.length;
+    if (tab && (br.tab !== tab || br.stack.length || br.q)) { br.tab = tab; br.stack = []; br.q = ""; reset = true; }
     this._spEl.classList.add("hidden");
     this._quEl.classList.add("hidden");
     this._brEl.classList.remove("hidden");
     if (!this._brBuilt) this._buildBrowse();
-    this._renderBrowse(!this._br.items.length);
+    this._renderBrowse(reset);
   };
 
   EchoMediaCard.prototype._buildBrowse = function () {
