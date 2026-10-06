@@ -59,6 +59,11 @@ const path = require("path");
   check(await p.evaluate(() => Math.abs(card._volOf("media_player.kitchen_echo_show_8") - 0.2) < 0.001), "a button press (device volume 20) shows on the slider");
   await p.evaluate(() => { card.setConfig(Object.assign({}, card._raw, { local_volume: "media" })); card.hass = card._hass; });
   check(await p.evaluate(() => Math.abs(card._volOf("media_player.kitchen_echo_show_8") - 0.35) < 0.001), "local_volume: media uses the player's own level");
+  await p.evaluate(() => window.EchoShow.prefs.set("media_device_volume", true));
+  check(await p.evaluate(() => Math.abs(card._volOf("media_player.kitchen_echo_show_8") - 0.2) < 0.001), "the display's setting overrides local_volume: media");
+  await p.evaluate(() => { window.EchoShow.prefs.set("media_device_volume", false); card.setConfig(Object.assign({}, card._raw, { local_volume: "device" })); card.hass = card._hass; });
+  check(await p.evaluate(() => Math.abs(card._volOf("media_player.kitchen_echo_show_8") - 0.35) < 0.001), "...and turned off, uses the player's own level");
+  await p.evaluate(() => window.EchoShow.prefs.set("media_device_volume", null));
 
   // Playing locally.
   await p.goto(url + "?localplaying#media"); await p.reload(); await p.waitForTimeout(1600);

@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.13.0
+ * Echo Show Dashboard 1.13.1
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.8.0, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.14.0, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.8.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.14.1, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -31,7 +31,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.8.0";
+  var VERSION = "1.8.1";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -88,6 +88,7 @@
     clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
     climate_tab: null,           // Climate page tab last used here (now/schedule/comfort/insights)
     volume_hud: "on",            // show volume changes on screen (on/off)
+    media_device_volume: null,   // media page slider for "This display" sets the Device volume; null = card config
   };
   var Prefs = {
     all: function () {
@@ -973,6 +974,10 @@
     h += '<div class="row' + (!room ? " sel" : "") + '" role="button" data-a="mroom" data-v=""><div class="t">No fixed room<small>Show whatever is playing</small></div><div class="r">' + (!room ? "✓" : "") + "</div></div>";
     var follow = p.media_follow !== null ? p.media_follow : c.follow_playing !== false;
     h += '<div class="sec">Behaviour</div>' + this._switchRow("Follow what's playing", "When this room is quiet, show another room that's playing", follow, "prefbool", ' data-k="media_follow" data-v="' + (follow ? "0" : "1") + '"');
+    if (lst) {
+      var dvol = p.media_device_volume !== null ? p.media_device_volume : c.local_volume !== "media";
+      h += this._switchRow("Volume slider follows the buttons", dvol ? "This display's slider sets the device volume, like its volume buttons" : "This display's slider sets Kiosk Satellite's separate media volume", dvol, "prefbool", ' data-k="media_device_volume" data-v="' + (dvol ? "0" : "1") + '"');
+    }
     var ms = window.EchoShow.mediaStatus ? window.EchoShow.mediaStatus() : null;
     if (c.ma_url && c.ma_token) {
       h += '<div class="sec">Music Assistant</div><div class="row static"><div class="t">Live queue<small>' + esc(ms ? ms.detail : "Opens when the media page is first shown") +
@@ -5126,7 +5131,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.14.0";
+  var VERSION = "1.14.1";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -5740,6 +5745,7 @@
     var self = this;
     if (!this._onPrefs) this._onPrefs = function (ev) {
       var k = ev.detail && ev.detail.key;
+      if (k === "media_device_volume") { if (self._built && self._hass) self._update(true); return; }
       if (k !== "media_room" && k !== "media_follow") return;
       self._applyProfile(self._prof || null);
       if (!self._manual) self._sel = -1;
@@ -5886,7 +5892,9 @@
   // not Kiosk Satellite's separate Media volume. Returns the number entity, else null.
   EchoMediaCard.prototype._devVolEnt = function (entityId) {
     var ES = window.EchoShow, r = this._roomOf(entityId);
-    if (!r || !r.local || this._config.local_volume !== "device" || !ES || !ES.devEnt || !this._localSlug) return null;
+    if (!r || !r.local || !ES || !ES.devEnt || !this._localSlug) return null;
+    var pref = ES.prefs ? ES.prefs.get("media_device_volume") : null;   // per display, from the settings panel
+    if (pref !== null && pref !== undefined ? !pref : this._config.local_volume !== "device") return null;
     return ES.devEnt(this._hass, this._localSlug, "number", "volume");
   };
 
@@ -9897,6 +9905,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.13.0", cards: ["echo-show-common 1.8.0","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.14.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.13.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.13.1", cards: ["echo-show-common 1.8.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.14.1","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.13.1 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

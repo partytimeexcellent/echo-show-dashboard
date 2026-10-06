@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.14.0";
+  var VERSION = "1.14.1";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -631,6 +631,7 @@
     var self = this;
     if (!this._onPrefs) this._onPrefs = function (ev) {
       var k = ev.detail && ev.detail.key;
+      if (k === "media_device_volume") { if (self._built && self._hass) self._update(true); return; }
       if (k !== "media_room" && k !== "media_follow") return;
       self._applyProfile(self._prof || null);
       if (!self._manual) self._sel = -1;
@@ -777,7 +778,9 @@
   // not Kiosk Satellite's separate Media volume. Returns the number entity, else null.
   EchoMediaCard.prototype._devVolEnt = function (entityId) {
     var ES = window.EchoShow, r = this._roomOf(entityId);
-    if (!r || !r.local || this._config.local_volume !== "device" || !ES || !ES.devEnt || !this._localSlug) return null;
+    if (!r || !r.local || !ES || !ES.devEnt || !this._localSlug) return null;
+    var pref = ES.prefs ? ES.prefs.get("media_device_volume") : null;   // per display, from the settings panel
+    if (pref !== null && pref !== undefined ? !pref : this._config.local_volume !== "device") return null;
     return ES.devEnt(this._hass, this._localSlug, "number", "volume");
   };
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.13.1
+
+- Settings › Media › **Volume slider follows the buttons**: per display, picks whether the media page's slider for "This display" sets the device volume (the default since 1.10.0, what the volume buttons change) or Kiosk Satellite's separate media volume. Same as the card's `local_volume`, without editing YAML.
+
 ## 1.13.0
 
 - **Volume buttons.** New Kiosk Satellite plugin, Echo Volume Buttons (`ks-plugin/`, needs Kiosk Satellite 2026.10.9): the hardware buttons change the device volume, or the assistant volume while it's answering, and step faster while held. Install the ZIP from `ks-plugin/dist/` on each display through Remote Admin → Plugin Manager → Developer Tools, and turn on Kiosk → Disable volume buttons. See `ks-plugin/README.md`.

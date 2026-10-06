@@ -22,7 +22,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.8.0";
+  var VERSION = "1.8.1";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -79,6 +79,7 @@
     clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
     climate_tab: null,           // Climate page tab last used here (now/schedule/comfort/insights)
     volume_hud: "on",            // show volume changes on screen (on/off)
+    media_device_volume: null,   // media page slider for "This display" sets the Device volume; null = card config
   };
   var Prefs = {
     all: function () {
@@ -964,6 +965,10 @@
     h += '<div class="row' + (!room ? " sel" : "") + '" role="button" data-a="mroom" data-v=""><div class="t">No fixed room<small>Show whatever is playing</small></div><div class="r">' + (!room ? "✓" : "") + "</div></div>";
     var follow = p.media_follow !== null ? p.media_follow : c.follow_playing !== false;
     h += '<div class="sec">Behaviour</div>' + this._switchRow("Follow what's playing", "When this room is quiet, show another room that's playing", follow, "prefbool", ' data-k="media_follow" data-v="' + (follow ? "0" : "1") + '"');
+    if (lst) {
+      var dvol = p.media_device_volume !== null ? p.media_device_volume : c.local_volume !== "media";
+      h += this._switchRow("Volume slider follows the buttons", dvol ? "This display's slider sets the device volume, like its volume buttons" : "This display's slider sets Kiosk Satellite's separate media volume", dvol, "prefbool", ' data-k="media_device_volume" data-v="' + (dvol ? "0" : "1") + '"');
+    }
     var ms = window.EchoShow.mediaStatus ? window.EchoShow.mediaStatus() : null;
     if (c.ma_url && c.ma_token) {
       h += '<div class="sec">Music Assistant</div><div class="row static"><div class="t">Live queue<small>' + esc(ms ? ms.detail : "Opens when the media page is first shown") +
