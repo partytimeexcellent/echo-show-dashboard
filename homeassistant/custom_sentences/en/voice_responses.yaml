@@ -12,7 +12,6 @@ intents:
       - sentences:
           - "(what's|what is) the temperature [inside|in here|in the house]"
           - "how (warm|cold|hot) is it (inside|in here|in the house)"
-          - "(what's|what is) it (inside|in the house)"
         slots:
           name: Thermostat  # <-- your thermostat's name
 
