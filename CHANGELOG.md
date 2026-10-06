@@ -2,7 +2,7 @@
 
 ## 1.11.0
 
-- **Natural voice answers.** New `custom_sentences/en/echo_responses.yaml` and `custom_templates/echo_speech.jinja` make Assist say "74 degrees" instead of "73.688 °F": whole degrees for temperatures and the weather, whole percentages, units spelled out with sensible rounding, and readable states ("away", "heat and cool"). Covers state questions, the weather and the thermostat. The `say_state`, `say_value`, `say_weather` and `say_climate` macros work in any template. See README › Natural voice answers.
+- **Natural voice answers.** New `custom_sentences/en/voice_responses.yaml` and `custom_templates/voice.jinja` make Assist say "74 degrees" instead of "73.688 °F": whole degrees for temperatures and the weather, whole percentages, units spelled out with sensible rounding, and readable states ("away", "heat and cool"). Covers state questions, the weather and the thermostat. The `say_state`, `say_value`, `say_weather` and `say_climate` macros work in any template. See README › Natural voice answers.
 
 ## 1.10.1
 

@@ -115,7 +115,7 @@ for f in yaml_files:
 
 check_template((HA / "custom_templates" / "echo_timers.jinja").read_text(), "echo_timers.jinja")
 check_template((HA / "custom_templates" / "echo_climate.jinja").read_text(), "echo_climate.jinja")
-check_template((HA / "custom_templates" / "echo_speech.jinja").read_text(), "echo_speech.jinja")
+check_template((HA / "custom_templates" / "voice.jinja").read_text(), "voice.jinja")
 
 
 # A `variables:` block must not use another key of the same block: Home Assistant saves UI
@@ -204,7 +204,7 @@ got = json.loads(render("{% from 'echo_timers.jinja' import slots_json %}{{ slot
 if [(x["i"], x["s"], x["n"]) for x in got] != [(1, "active", "Pasta"), (2, "done", "Eggs")]:
     failures.append(f"slots_json = {got}")
 
-# Spoken numbers for Assist's answers (echo_speech.jinja).
+# Spoken numbers for Assist's answers (voice.jinja).
 env.filters["abs"] = abs
 FAKE_ATTRS = {"sensor.bed": {"unit_of_measurement": "°F"}, "weather.home": {"temperature": 69.4},
               "climate.t": {"current_temperature": 73.5}}
@@ -222,7 +222,7 @@ speech = {
 }
 for call, want in speech.items():
     name = call.split("(")[0]
-    got = render("{% from 'echo_speech.jinja' import " + name + " %}{{ " + call + " }}")
+    got = render("{% from 'voice.jinja' import " + name + " %}{{ " + call + " }}")
     if got != want:
         failures.append(f"{call} = {got!r}, expected {want!r}")
 

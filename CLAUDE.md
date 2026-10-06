@@ -26,7 +26,7 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
   `echo_climate_plan()` decides the setpoints. Scripts/automations may be pasted into the HA UI, which saves keys
   sorted: never use a key from the same `variables:` block (split into steps), and quote YAML-boolean keys (`off:`).
   `test/climate_plan.py` has scenario tests for the macro.
-- `homeassistant/custom_sentences/en/echo_responses.yaml` + `custom_templates/echo_speech.jinja`: Assist's spoken answers
+- `homeassistant/custom_sentences/en/voice_responses.yaml` + `custom_templates/voice.jinja`: Assist's spoken answers
   (HassGetState/GetWeather/Climate*) rounded with units spelled out; macros `say_state/say_value/say_weather/say_climate`.
 - `test/`: `index.html` is a fake HA (`#climate[-schedule|-comfort|-insights|-house|-day]`, `?heating`, `?hold`, `?away`, `?rooms`, `?filter`, `?override`, `?mode=heat`) (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
   `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;

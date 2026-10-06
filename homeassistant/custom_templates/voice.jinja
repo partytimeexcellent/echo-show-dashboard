@@ -1,8 +1,8 @@
 {#- Spoken forms of entity states, for Assist's voice answers.
 
   "73.688 °F" becomes "74 degrees", "45.2 %" becomes "45 percent", "1.0 kWh" becomes
-  "1 kilowatt hour". Used by custom_sentences/en/echo_responses.yaml; usable from any
-  template too:  {% from 'echo_speech.jinja' import say_state %}{{ say_state('sensor.x') }}
+  "1 kilowatt hour". Used by custom_sentences/en/voice_responses.yaml; usable from any
+  template too:  {% from 'voice.jinja' import say_state %}{{ say_state('sensor.x') }}
 -#}
 
 {#- unit -> [singular, plural, decimals]. decimals -1 = whole number from 10 up, else one decimal. -#}
