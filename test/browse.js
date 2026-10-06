@@ -59,6 +59,16 @@ const path = require("path");
   const fx = await p.evaluate(() => { const f = customElements.get("echo-media-card")._fixImg, L = { protocol: "https:", origin: "https://ha.example.com" };
     return [f("http://192.168.1.211:8123/local/resources/radio-logos/KLCC-logo.png", L), f("http://192.168.1.211:8123/local/a.png", { protocol: "http:", origin: "http://x" }), f("https://i.scdn.co/x", L), f("http://example.com/logo.png", L), f("", L)]; });
   check(fx[0] === "https://ha.example.com/local/resources/radio-logos/KLCC-logo.png" && fx[1] === "http://192.168.1.211:8123/local/a.png" && fx[2] === "https://i.scdn.co/x" && fx[3] === "http://example.com/logo.png" && fx[4] === "", "http logos on an https dashboard use the page's own origin (" + fx[0] + ")");
+  // Radio from Music Assistant: the station logo from the library goes after MA's own picture,
+  // and a picture that doesn't load moves on to it.
+  await p.evaluate(() => card._withLogo({ attributes: { media_content_id: "library://radio/KRVM-FM1" } }, []));
+  await p.waitForTimeout(300);
+  const logo = await p.evaluate(() => card._withLogo({ attributes: { media_content_id: "library://radio/KRVM-FM1" } }, ["https://ma/imageproxy/1"]).join("|"));
+  check(logo === "https://ma/imageproxy/1|http://r/x.png", "radio art falls back to the station logo (" + logo + ")");
+  const px = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  await p.evaluate((px) => { card._artKey = null; card._wantArt(["http://10.255.255.1/stalls.png", px]); }, px);
+  await p.waitForTimeout(5500);
+  check(await p.evaluate((px) => card._artUrl === px && !card._npEl.classList.contains("noart"), px), "a picture that stalls or fails is skipped for the next one");
   check(errs.length === 0, "no page errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close();
   process.exit(fail ? 1 : 0);

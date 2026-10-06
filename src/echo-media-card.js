@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.13.2";
+  var VERSION = "1.13.3";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -928,7 +928,7 @@
       if (self._imgEl.getAttribute("src") !== self._artUrl) return;
       // Try the next candidate before giving up and switching to the no-art layout.
       self._artIdx++;
-      if (self._artList && self._artIdx < self._artList.length) { self._artUrl = self._artList[self._artIdx]; self._imgEl.setAttribute("src", self._artUrl); }
+      if (self._artList && self._artIdx < self._artList.length) { self._artUrl = self._artList[self._artIdx]; self._imgEl.setAttribute("src", self._artUrl); self._artWait(); }
       else self._setArt(false);
     });
 
@@ -1064,7 +1064,7 @@
     set(".ttl", title);
     set(".by", by);
     set(".alb", album !== title ? album : "");
-    this._wantArt(artUrls(st));
+    this._wantArt(this._withLogo(st, artUrls(st)));
 
     // transport
     var f = a.supported_features || 0;
@@ -1134,6 +1134,26 @@
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
   };
 
+  // Music Assistant radio: until it has found the song's album art, its picture is the station
+  // logo fetched through its own image proxy, which can stall. The logo straight from the
+  // library (as Browse shows it) goes last in the list, so it shows instead.
+  EchoMediaCard.prototype._withLogo = function (st, list) {
+    var id = String(st.attributes.media_content_id || "");
+    if (!/^library:\/\/radio\//.test(id) || !this._config.ma_config_entry) return list;
+    var self = this;
+    if (!this._logos && !(this._logosAt > Date.now() - 300000)) {
+      this._logosAt = Date.now();
+      this._maCall("get_library", { media_type: "radio", limit: 500, offset: 0 }).then(function (r) {
+        var m = {};
+        (r.items || []).forEach(function (x) { if (x.uri && typeof x.image === "string" && x.image) m[x.uri] = fixImg(x.image); });
+        self._logos = m;
+        if (self._hass && self._built) self._paint();
+      }, function () { /* try again in a few minutes */ });
+    }
+    var u = this._logos && this._logos[id];
+    return u && list.indexOf(u) === -1 ? list.concat([u]) : list;
+  };
+
   // Album art: preload, then switch layouts only once we know whether it loads.
   EchoMediaCard.prototype._wantArt = function (list) {
     var key = list.join("|");
@@ -1144,6 +1164,20 @@
     this._artUrl = list[0] || "";
     if (!this._artUrl) { this._setArt(false); this._imgEl.removeAttribute("src"); return; }
     this._imgEl.setAttribute("src", this._artUrl);
+    this._artWait();
+  };
+
+  // A picture that hasn't loaded after a few seconds is skipped for the next one, if any.
+  EchoMediaCard.prototype._artWait = function () {
+    var self = this, url = this._artUrl;
+    clearTimeout(this._artTimer);
+    this._artTimer = setTimeout(function () {
+      var img = self._imgEl;
+      if (self._artUrl !== url || (img.complete && img.naturalWidth) || !self._artList || self._artIdx + 1 >= self._artList.length) return;
+      self._artUrl = self._artList[++self._artIdx];
+      img.setAttribute("src", self._artUrl);
+      self._artWait();
+    }, 4000);
   };
 
   EchoMediaCard.prototype._setArt = function (ok) {

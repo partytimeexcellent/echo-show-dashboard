@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.3
+
+- Radio from Music Assistant showed no picture for up to a song while Music Assistant looked for the album art: its stand-in picture is the station logo through its own image proxy, which stalls. The media page now falls back to the station's logo from the library (as Browse shows it), and skips any picture that hasn't loaded after 4 seconds.
+
 ## 1.11.2
 
 - Radio started from Music Assistant showed no artwork until the next song: the station logo comes as `http://<ip>:8123/local/...`, which an https dashboard blocks. Now-playing artwork from `/local/`, `/api/` and `/hacsfiles/` now loads from the page's own address, like Browse since 1.10.1.
