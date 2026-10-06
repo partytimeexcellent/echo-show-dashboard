@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.15.0";
+  var VERSION = "1.15.1";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -208,6 +208,7 @@
     ".qf .ti:after{content:'';position:absolute;right:3.05vh;bottom:2.75vh;width:0;height:0;border-style:solid;border-width:1.25vh 0 1.25vh 2vh;border-color:transparent transparent transparent #fff;z-index:2;}",
     ".qf .tt{font-size:2.5vh;margin-top:1.3vh;-webkit-line-clamp:1;text-align:left;}",
     ".qf .ts{display:none;}",
+    ".qf .tile.folder .ti:before,.qf .tile.folder .ti:after{display:none;}",
     /* ---- overlays ---- */
     ".ov{position:absolute;left:0;top:0;right:0;bottom:0;z-index:5;border-radius:3vh;background:#0c1224;border:1px solid rgba(255,255,255,.08);box-shadow:0 2vh 6vh rgba(0,0,0,.5);display:flex;flex-direction:column;padding:2.4vh 2.8vh;box-sizing:border-box;}",
     ".hidden{display:none !important;}",
@@ -1086,11 +1087,35 @@
       idle.classList.toggle("hasq", list.length > 0);
       if (!list.length) { qf.innerHTML = ""; return; }
       var h = '<div class="qh"><div class="sh">Radio</div><div class="all" role="button" data-act="radio-all">All stations<ha-icon icon="mdi:chevron-right"></ha-icon></div></div><div class="qfg">';
-      for (var k = 0; k < list.length; k++) h += self._tileHtml(list[k], "q" + k, false);
+      for (var k = 0; k < list.length; k++) {
+        var th = self._tileHtml(list[k], "q" + k, false);
+        h += list[k].mtype === "somafm" ? th.replace('class="tile', 'class="tile folder') : th;
+      }
       qf.innerHTML = h + "</div>";
     };
     if (!qn || !this._config.ma_config_entry) { show([]); return; }
-    this._loadStations().then(function (items) { show(items.slice(0, qn)); }, function () { /* library unavailable */ });
+    // SomaFM's stations are one tile in the last slot (its menu), as on Browse's Radio tab.
+    var soma = this._config.somafm;
+    this._loadStations().then(function (items) {
+      var rest = soma ? items.filter(function (x) { return !SOMA.test(x.title); }) : items;
+      if (!soma || qn < 2) { show(rest.slice(0, qn)); return; }
+      var inLib = items.length - rest.length;
+      var withSoma = function (n) { show(n ? rest.slice(0, qn - 1).concat([self._somaTile(n)]) : rest.slice(0, qn)); };
+      if (inLib) {
+        // Its menu holds the library's SomaFM stations, as when Browse's Radio tab lists them.
+        if (!self._soma || Date.now() - self._soma.t >= 600000) {
+          var lib = items.filter(function (x) { return SOMA.test(x.title); }).map(function (x) {
+            var t = {}; for (var k in x) t[k] = x[k];
+            t.title = x.title.replace(SOMA, "") || x.title; t.sub = "SomaFM"; return t; }).sort(byTitle);
+          self._soma = { t: Date.now(), p: Promise.resolve(lib) };
+        }
+        withSoma(inLib);
+      } else if (self._somaN !== undefined) withSoma(self._somaN);
+      else {
+        show(rest.slice(0, qn - 1));
+        self._somaStations().then(function (l) { self._somaN = l.length; withSoma(l.length); }, function () { self._somaN = 0; withSoma(0); });
+      }
+    }, function () { /* library unavailable */ });
   };
 
   EchoMediaCard.prototype._paintNowPlaying = function (st) {
@@ -1401,6 +1426,7 @@
       case "item":
         var it = this._itemFor(el.getAttribute("data-k"));
         if (!it) break;
+        if (it.mtype === "somafm" && el.getAttribute("data-k").charAt(0) === "q") { this._openBrowse("radio"); this._openView(it); break; }
         if (ev && ev.target.closest && ev.target.closest(".more")) this._openSheet(it);
         else if (it.kind === "ma" && (it.mtype === "artist" || it.mtype === "album")) this._openView(it);
         else if (it.mtype === "somafm") this._openView(it);
@@ -2061,7 +2087,7 @@
     var br = this._br, v = br.stack.pop();
     br.req++;
     this._renderBrowse(false);
-    if (v && v.saved) {
+    if (v && v.saved && v.saved.items.length) {
       br.items = v.saved.items; br.more = v.saved.more; br.offset = v.saved.offset; br.loading = false;
       this._renderGrid(false, []);
       this._gridEl.scrollTop = v.saved.scroll;

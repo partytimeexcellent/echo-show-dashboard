@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.15.1
+
+- The "Nothing playing" page's radio grid puts **SomaFM** in its last slot (five stations, then SomaFM), opening the same SomaFM station menu as Browse. The SomaFM stations don't take other slots. `somafm: false` turns this off.
 ## 1.15.0
 
 - **New "Nothing playing" page.** The media page's idle screen is redesigned: a record with its tonearm parked, glowing in the theme's accent colour, over the room's name and the Browse music and Speakers buttons, with the radio stations in a 3×2 grid beside it (up to six, each with a play badge) and an "All stations" link that opens Browse on Radio. Without Music Assistant stations, the record and buttons sit centred.
