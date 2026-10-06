@@ -111,3 +111,60 @@
     {{- say_state(entity_id) -}}
   {%- endif -%}
 {%- endmacro -%}
+
+{#- A room's temperature sensor: the first temperature sensor in the area that isn't a device's own
+    (CPU, "Device temperature", battery), else the area's thermostat. '' when there is none. -#}
+{%- macro room_temperature_entity(area) -%}
+  {%- set ns = namespace(e='') -%}
+  {%- if area -%}
+    {%- for e in area_entities(area) if not ns.e and e.startswith('sensor.')
+          and is_state_attr(e, 'device_class', 'temperature') and is_number(states(e))
+          and not ((state_attr(e, 'friendly_name') or e) | lower) is search('cpu|device temp|processor|battery|chip') -%}
+      {%- set ns.e = e -%}
+    {%- endfor -%}
+    {%- for e in area_entities(area) if not ns.e and e.startswith('climate.')
+          and is_number(state_attr(e, 'current_temperature')) -%}
+      {%- set ns.e = e -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {{- ns.e -}}
+{%- endmacro -%}
+
+{#- How to say where a floor is: "upstairs", "on the first floor". -#}
+{%- macro on_floor(floor) -%}
+  {%- set n = floor_name(floor) | lower -%}
+  {{- n if n is search('stairs$|^basement$|^attic$') else 'on the ' ~ n -}}
+{%- endmacro -%}
+
+{#- "What's the temperature?" for a room, in this order:
+    1. the room's own temperature sensor (or thermostat): "It's 73 degrees in the bedroom."
+    2. else the other rooms on its floor, averaged: "It's 72 degrees upstairs."
+    3. else the house thermostat: "The thermostat says 74 degrees."
+    area and floor are ids; pass floor alone for "how warm is it upstairs". -#}
+{%- macro say_room_temperature(area, floor='') -%}
+  {%- set e = room_temperature_entity(area) -%}
+  {%- set fl = floor or (floor_id(area) if area else '') or '' -%}
+  {%- set ns = namespace(vals=[]) -%}
+  {%- if not e and fl -%}
+    {%- for a in floor_areas(fl) -%}
+      {%- set fe = room_temperature_entity(a) -%}
+      {%- if fe -%}
+        {%- set ns.vals = ns.vals + [(state_attr(fe, 'current_temperature') if fe.startswith('climate.') else states(fe)) | float] -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {%- set here = (area_name(area) | lower) if area else '' -%}
+  {%- if e -%}
+    It's {{ say_climate(e) if e.startswith('climate.') else say_state(e) }} in the {{ here }}.
+  {%- elif ns.vals -%}
+    It's {{ say_value(ns.vals | sum / ns.vals | count, '°') }} {{ on_floor(fl) }}.
+  {%- else -%}
+    {%- set t = states.climate | selectattr('attributes.current_temperature', 'defined') | list -%}
+    {%- if t -%}
+      {{- 'There is no temperature sensor in the ' ~ here ~ '. ' if here else '' -}}
+      The {{ t[0].name | lower }} says {{ say_climate(t[0].entity_id) }}.
+    {%- else -%}
+      I don't have a temperature for {{ 'the ' ~ here if here else 'here' }}.
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro -%}

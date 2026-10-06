@@ -2,7 +2,7 @@
 
 ## 1.11.0
 
-- **Natural voice answers.** New `custom_sentences/en/voice_responses.yaml` and `custom_templates/voice.jinja` make Assist say "74 degrees" instead of "73.688 °F": whole degrees for temperatures and the weather, whole percentages, units spelled out with sensible rounding, and readable states ("away", "heat and cool"). Covers state questions, the weather and the thermostat. The `say_state`, `say_value`, `say_weather` and `say_climate` macros work in any template. "What's the temperature?" now reads the thermostat from any room instead of falling through to the AI agent (set its name in the file). See README › Natural voice answers.
+- **Natural voice answers.** New `custom_sentences/en/voice_responses.yaml` and `custom_templates/voice.jinja` make Assist say "74 degrees" instead of "73.688 °F": whole degrees for temperatures and the weather, whole percentages, units spelled out with sensible rounding, and readable states ("away", "heat and cool"). Covers state questions, the weather and the thermostat. The `say_state`, `say_value`, `say_weather` and `say_climate` macros work in any template. New `packages/voice.yaml` answers "what's the temperature?" from the room you ask in: its own sensor, else its floor, else the thermostat, instead of falling through to the AI agent; "in the <room>", "upstairs" and "outside" work too. See README › Natural voice answers.
 
 ## 1.10.1
 

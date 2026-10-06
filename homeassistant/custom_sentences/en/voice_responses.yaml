@@ -4,17 +4,6 @@
 # Only these answers change; every other answer of these intents keeps Home Assistant's own.
 language: en
 
-# "What's the temperature?" with no room names the satellite's own room, and fails (handing the
-# question to the AI agent) when that room has no thermostat. These send it to the house thermostat.
-intents:
-  HassClimateGetTemperature:
-    data:
-      - sentences:
-          - "(what's|what is) the temperature [inside|in here|in the house]"
-          - "how (warm|cold|hot) is it (inside|in here|in the house)"
-        slots:
-          name: Thermostat  # <-- your thermostat's name
-
 responses:
   intents:
     # "What's the bedroom temperature?", "What is the humidity in the kitchen?"

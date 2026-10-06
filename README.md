@@ -108,7 +108,7 @@ Assist reads numbers the way the entity stores them, so "what's the bedroom temp
 
 It changes the spoken answer of the built-in intents only: an entity's state (`HassGetState`), the weather (`HassGetWeather`), the thermostat's temperature (`HassClimateGetTemperature`) and its confirmation (`HassClimateSetTemperature`). Temperatures are whole degrees, percentages whole, other units spelled out (`kWh` → "kilowatt hours", `mph` → "miles per hour") with sensible rounding, and states like `not_home` or `heat_cool` read as "away" and "heat and cool".
 
-The file also makes "what's the temperature?" (and "how warm is it inside?") read the thermostat. Without it, Assist looks for a thermostat in the room of the display you're talking to, finds none in a kitchen or office, and hands the question to the AI agent. Change `name: Thermostat` to your thermostat's name. Pipelines using an AI agent with **Prefer handling commands locally** on get these answers too for anything the built-in intents understand.
+**"What's the temperature?" from the room you're in.** Out of the box, Assist only looks for a thermostat in the room of the display you ask, and hands the question to the AI agent when there is none. [`packages/voice.yaml`](homeassistant/packages/voice.yaml) answers it instead: the room's own temperature sensor (CPU and "device temperature" sensors are skipped), else the average of the other rooms on its floor, else the thermostat. "How warm is it in the bedroom?" and "what's the temperature upstairs?" ask for a room or floor, and "outside" gives the weather. Copy it to `<config>/packages/` (or paste its automation into a new UI automation in YAML mode).
 
 The macros work in any template, for your own TTS automations:
 

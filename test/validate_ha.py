@@ -212,6 +212,39 @@ FAKE_STATES.update({"sensor.bed": "73.688", "weather.home": "partlycloudy", "cli
                     "person.me": "not_home"})
 env.globals.update({"is_number": lambda v: _float(v, None) is not None,
                     "state_attr": lambda e, a: FAKE_ATTRS.get(e, {}).get(a)})
+env.tests["search"] = lambda v, pat: re.search(pat, str(v)) is not None
+
+
+# Rooms and floors for say_room_temperature: bedroom has a sensor (and a CPU one to skip),
+# the kitchen has none but shares the main floor with the den, the garage has no floor.
+class _Climate:
+    entity_id, name = "climate.t", "Thermostat"
+    attributes = {"current_temperature": 73.5}
+
+
+class _States:
+    climate = [_Climate()]
+
+    def __call__(self, e):
+        return FAKE_STATES.get(e, "unknown")
+
+
+AREAS = {"bedroom": ["sensor.bed_cpu", "sensor.bed"], "kitchen": ["light.k"], "den": ["sensor.den"],
+         "garage": []}
+FLOORS = {"main": ["kitchen", "den"], "upstairs": ["bedroom"]}
+FAKE_ATTRS.update({"sensor.bed_cpu": {"device_class": "temperature", "friendly_name": "Bedroom Show CPU temperature"},
+                   "sensor.den": {"device_class": "temperature", "friendly_name": "Den Temperature"}})
+FAKE_ATTRS["sensor.bed"].update({"device_class": "temperature", "friendly_name": "Bedroom Temperature"})
+FAKE_STATES.update({"sensor.bed_cpu": "120", "sensor.den": "70.2"})
+env.globals.update({
+    "states": _States(),
+    "is_state_attr": lambda e, a, v: FAKE_ATTRS.get(e, {}).get(a) == v,
+    "area_entities": lambda a: AREAS.get(a, []),
+    "area_name": lambda a: a.title(),
+    "floor_id": lambda a: next((f for f, ars in FLOORS.items() if a in ars), None),
+    "floor_areas": lambda f: FLOORS.get(f, []),
+    "floor_name": lambda f: f.title(),
+})
 speech = {
     "say_value(73.4, '°F')": "73 degrees", "say_value('1', '°')": "1 degree", "say_value(45.2, '%')": "45 percent",
     "say_value(1.04, 'kWh')": "1 kilowatt hour", "say_value(2.46, 'kWh')": "2.5 kilowatt hours",
@@ -219,6 +252,11 @@ speech = {
     "say_value(0.04, 'in')": "0.04 inches", "say_state('sensor.bed')": "74 degrees",
     "say_state('person.me')": "away", "say_state('climate.t')": "heat and cool",
     "say_weather('weather.home')": "69 degrees and partly cloudy", "say_climate('climate.t')": "74 degrees",
+    "say_room_temperature('bedroom')": "It's 74 degrees in the bedroom.",
+    "say_room_temperature('kitchen')": "It's 70 degrees on the main.",
+    "say_room_temperature('', 'upstairs')": "It's 74 degrees upstairs.",
+    "say_room_temperature('garage')": "There is no temperature sensor in the garage. The thermostat says 74 degrees.",
+    "say_room_temperature('')": "The thermostat says 74 degrees.",
 }
 for call, want in speech.items():
     name = call.split("(")[0]
