@@ -75,7 +75,7 @@ views:
             open_on_start: true       # ... and when one is started (e.g. by voice)
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
-          - icon: mdi:thermostat
+          - icon: mdi:home-thermometer-outline
             navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings
@@ -97,14 +97,14 @@ views:
             active: true
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
-          - icon: mdi:thermostat
+          - icon: mdi:home-thermometer-outline
             navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings            # the settings panel (same on every page)
 
   - title: Climate
     path: climate
-    icon: mdi:thermostat
+    icon: mdi:home-thermometer-outline
     type: panel
     cards:
       # Needs packages/echo_climate.yaml + echo_house.yaml for the schedule, holds and house
@@ -124,7 +124,7 @@ views:
             open_on_start: true
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
-          - icon: mdi:thermostat
+          - icon: mdi:home-thermometer-outline
             navigation_path: /echo-show/climate
             active: true
           - icon: mdi:cog
@@ -168,7 +168,7 @@ views:
           - icon: mdi:speaker-multiple
             navigation_path: /echo-show/media
             active: true
-          - icon: mdi:thermostat
+          - icon: mdi:home-thermometer-outline
             navigation_path: /echo-show/climate
           - icon: mdi:cog
             action: settings

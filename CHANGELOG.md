@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.11.2
+
+- Radio started from Music Assistant showed no artwork until the next song: the station logo comes as `http://<ip>:8123/local/...`, which an https dashboard blocks. Now-playing artwork from `/local/`, `/api/` and `/hacsfiles/` now loads from the page's own address, like Browse since 1.10.1.
+- The example dashboard's climate button and view use `mdi:home-thermometer-outline`.
+
 ## 1.11.1
 
 - The natural voice answers from 1.11.0 (`voice.jinja`, `voice_responses.yaml`, `packages/voice.yaml`) moved out of this repo: they work for all of Assist, not just the Echo Show dashboard. Nothing changes on a Home Assistant that already has them.

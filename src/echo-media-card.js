@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.13.1";
+  var VERSION = "1.13.2";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -812,13 +812,17 @@
     return null;
   }
 
-  // Artwork URLs to try, best first.
+  // Artwork URLs to try, best first. A station logo from /local/ comes as http://<ip>:8123/..., which
+  // an https dashboard blocks, so it goes through fixImg like the Browse tiles.
   function artUrls(st) {
     if (!st) return [];
     var a = st.attributes;
     var list = a._art || [a.entity_picture_local, a.entity_picture];
     var out = [];
-    for (var i = 0; i < list.length; i++) if (list[i] && out.indexOf(list[i]) === -1) out.push(list[i]);
+    for (var i = 0; i < list.length; i++) {
+      var u = fixImg(list[i]);
+      if (u && out.indexOf(u) === -1) out.push(u);
+    }
     return out;
   }
 

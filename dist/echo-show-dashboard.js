@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.11.1
+ * Echo Show Dashboard 1.11.2
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.1, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.2, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -5052,7 +5052,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.13.1";
+  var VERSION = "1.13.2";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -5847,13 +5847,17 @@
     return null;
   }
 
-  // Artwork URLs to try, best first.
+  // Artwork URLs to try, best first. A station logo from /local/ comes as http://<ip>:8123/..., which
+  // an https dashboard blocks, so it goes through fixImg like the Browse tiles.
   function artUrls(st) {
     if (!st) return [];
     var a = st.attributes;
     var list = a._art || [a.entity_picture_local, a.entity_picture];
     var out = [];
-    for (var i = 0; i < list.length; i++) if (list[i] && out.indexOf(list[i]) === -1) out.push(list[i]);
+    for (var i = 0; i < list.length; i++) {
+      var u = fixImg(list[i]);
+      if (u && out.indexOf(u) === -1) out.push(u);
+    }
     return out;
   }
 
@@ -9704,6 +9708,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.11.1", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.1","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.11.1 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.11.2", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.2","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.11.2 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();
