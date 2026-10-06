@@ -17,6 +17,8 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
     `script.echo_climate_hold` / `script.echo_climate_set` / `script.echo_house_set`. Uses `window.EchoClockWheel`.
   - `echo-notify.js`: full-screen alerts (NWS, persistent notifications `echo_*`, `echo_notify` events).
 - `dist/echo-show-dashboard.js`: built bundle, **committed**. HACS installs it.
+- `ks-plugin/`: Echo Volume Buttons, a Kiosk Satellite plugin (Java, SDK 1) for the hardware volume keys. `python3 ks-plugin/tools/test.py`
+  runs its tests on a plain JDK; building the ZIP needs Android build-tools, so CI (`ks-plugin.yml`) builds it and commits it to `ks-plugin/dist/`.
 - `homeassistant/`: package (timer helpers and scripts), Jinja macros, blueprints, example dashboard.
   `packages/echo_kiosk.yaml` + `custom_templates/echo_kiosk.py`: `shell_command.echo_kiosk`, which the settings
   panel's Alarms tab calls (return_response) to read/set the tablet's `alarms.*` settings over its Remote API and to
@@ -29,7 +31,7 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
 - `test/`: `index.html` is a fake HA (`#climate[-schedule|-comfort|-insights|-house|-day]`, `?heating`, `?hold`, `?away`, `?rooms`, `?filter`, `?override`, `?mode=heat`) (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
   `?ringing`, `?noalarms`) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
   `alarm-list.js` drives the Clock Alarms tab (volume row, swipe/Edit delete, Undo); `alarms-settings.js` drives the settings Alarms tab (fake `shell_command.echo_kiosk`; `?notones`, `?noshell`);
-  `smoke.js` loads every card in Playwright; `timers-own.js` checks per-display timer sets (`?ownset`, `?nonadmin`); `validate_ha.py` checks the YAML/Jinja.
+  `smoke.js` loads every card in Playwright; `volume-hud.js` checks the volume level bar; `timers-own.js` checks per-display timer sets (`?ownset`, `?nonadmin`); `validate_ha.py` checks the YAML/Jinja.
 
 ## Workflow
 1. Edit `src/`, bump that file's `VERSION` (and `package.json` for a release), add to CHANGELOG.

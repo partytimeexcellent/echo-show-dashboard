@@ -1,0 +1,48 @@
+name: Volume buttons plugin
+
+# Tests and builds the Kiosk Satellite plugin in ks-plugin/ and commits the ZIP to ks-plugin/dist/,
+# where it can be downloaded for Plugin Manager > Developer Tools > Install from ZIP.
+on:
+  push:
+    paths:
+      - "ks-plugin/**"
+      - "!ks-plugin/dist/**"
+      - ".github/workflows/ks-plugin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ks-plugin-${{ github.ref }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v4
+      - name: Android platform and build tools
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Test
+        run: python3 ks-plugin/tools/test.py
+      - name: Build
+        run: python3 ks-plugin/tools/build.py --android-platform 35
+      - name: Commit the ZIP
+        if: github.ref_type == 'branch'
+        run: |
+          cd ks-plugin/dist
+          zip=$(ls echo-volume-buttons-*.zip)
+          # Keep only this version's package.
+          git rm -q --ignore-unmatch $(git ls-files 'echo-volume-buttons-*.zip*' | grep -v "^$zip") || true
+          git add -f "$zip" "$zip.sha256"
+          if git diff --cached --quiet; then echo "ZIP unchanged"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "Build $zip"
+          git pull -q --rebase origin "$GITHUB_REF_NAME"
+          git push -q origin "HEAD:$GITHUB_REF_NAME"

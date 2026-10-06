@@ -3,3 +3,6 @@ test/screenshots/
 .DS_Store
 __pycache__/
 *.pyc
+ks-plugin/dist/*
+!ks-plugin/dist/*.zip
+!ks-plugin/dist/*.zip.sha256

@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.12.0
+ * Echo Show Dashboard 1.13.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.14.0, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.8.0, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.14.0, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -31,7 +31,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.1";
+  var VERSION = "1.8.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -87,6 +87,7 @@
     weather_sky: null,           // live sky colours behind the weather; null = theme default
     clock_tab: null,             // Clock page tab last used here (alarms/stopwatch/timers)
     climate_tab: null,           // Climate page tab last used here (now/schedule/comfort/insights)
+    volume_hud: "on",            // show volume changes on screen (on/off)
   };
   var Prefs = {
     all: function () {
@@ -695,6 +696,7 @@
     }
     var ov = Prefs.get("overlay");
     h += '<div class="sec">Timer countdown on other pages</div>' + this._chips([{ v: "auto", l: "Automatic" }, { v: "top-right", l: "Top right" }, { v: "top-left", l: "Top left" }, { v: "bottom-right", l: "Bottom right" }, { v: "bottom-left", l: "Bottom left" }, { v: "off", l: "Off" }], ov, "pref", ' data-k="overlay"');
+    if (this._device) h += '<div class="sec">Volume level when it changes</div>' + this._chips([{ v: "on", l: "Show" }, { v: "off", l: "Off" }], Prefs.get("volume_hud"), "pref", ' data-k="volume_hud"');
     return h;
   };
 
@@ -1269,6 +1271,78 @@
   };
 
   if (!customElements.get("echo-timer-overlay")) customElements.define("echo-timer-overlay", EchoTimerOverlay);
+
+  // ---------- volume level on screen ----------
+  // Kiosk Satellite changes the volume without Android's own volume panel (for example from the
+  // Echo Volume Buttons plugin in ks-plugin/, a voice command or an automation), so this shows
+  // a short level bar whenever this display's number.<device>_volume / _assistant_volume /
+  // _media_volume changes. Not while the settings panel (which has the sliders) is open.
+  var HUD_CH = [
+    { s: "volume", n: "Device volume", i: "mdi:volume-high" },
+    { s: "assistant_volume", n: "Assistant volume", i: "mdi:account-voice" },
+    { s: "media_volume", n: "Media volume", i: "mdi:music-note" },
+  ];
+  var HUD_STYLE = [
+    ":host{position:fixed;z-index:9999;top:3vh;left:50%;transform:translate(-50%,-2vh);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;font-family:var(--es-font,var(--ha-font-family-body,Roboto,'Helvetica Neue',Arial,sans-serif));color:#fff;}",
+    ":host(.on){opacity:1;transform:translate(-50%,0);}",
+    ".box{display:flex;align-items:center;gap:2vh;min-width:42vw;padding:1.8vh 3vh;box-sizing:border-box;background:var(--es-ov,rgba(10,14,28,1));border:1px solid rgba(255,255,255,.14);border-radius:4vh;box-shadow:0 1.6vh 4vh rgba(0,0,0,.5);}",
+    "ha-icon{--mdc-icon-size:4.4vh;width:4.4vh;height:4.4vh;display:inline-flex;color:var(--es-hi,#ffb340);flex:0 0 auto;}",
+    ".mid{flex:1 1 auto;min-width:0;}",
+    ".nm{font-size:2.3vh;opacity:.75;margin-bottom:1vh;}",
+    ".tr{height:1.2vh;border-radius:.6vh;background:rgba(255,255,255,.16);overflow:hidden;}",
+    ".fill{height:100%;border-radius:.6vh;background:linear-gradient(90deg,var(--es-acc1,#ffab2e),var(--es-acc2,#ff8a00));transition:width .12s linear;}",
+    ".pc{font-size:3.6vh;font-variant-numeric:tabular-nums;min-width:8vh;text-align:right;}",
+  ].join("");
+  function EchoVolumeHud() { return Reflect.construct(HTMLElement, [], EchoVolumeHud); }
+  EchoVolumeHud.prototype = Object.create(HTMLElement.prototype);
+  EchoVolumeHud.prototype.constructor = EchoVolumeHud;
+  Object.setPrototypeOf(EchoVolumeHud, HTMLElement);
+  EchoVolumeHud.prototype.connectedCallback = function () {
+    if (this.shadowRoot) return;
+    var root = this.attachShadow({ mode: "open" });
+    root.innerHTML = "<style>" + HUD_STYLE + '</style><div class="box"><ha-icon></ha-icon><div class="mid"><div class="nm"></div><div class="tr"><div class="fill"></div></div></div><div class="pc"></div></div>';
+  };
+  EchoVolumeHud.prototype.show = function (ch, pct) {
+    var r = this.shadowRoot;
+    if (!r) return;
+    pct = Math.round(clamp(pct, 0, 100));
+    r.querySelector("ha-icon").setAttribute("icon", ch.s === "volume" && pct === 0 ? "mdi:volume-off" : ch.i);
+    r.querySelector(".nm").textContent = ch.n;
+    r.querySelector(".fill").style.width = pct + "%";
+    r.querySelector(".pc").textContent = pct + "%";
+    this.classList.add("on");
+    var self = this;
+    clearTimeout(this._t);
+    this._t = setTimeout(function () { self.classList.remove("on"); }, 1600);
+  };
+  if (!customElements.get("echo-volume-hud")) customElements.define("echo-volume-hud", EchoVolumeHud);
+
+  var hud = { slug: undefined, seen: {}, el: null };
+  function watchVolume() {
+    var hass = findHass();
+    if (!hass || !hass.states) return;
+    if (hud.slug === undefined) {
+      hud.slug = null;
+      window.EchoShow.deviceSlug(hass).then(function (s) { hud.slug = s || null; });
+      return;
+    }
+    if (!hud.slug) return;
+    HUD_CH.forEach(function (ch) {
+      var id = devEnt(hass, hud.slug, "number", ch.s), st = id && hass.states[id];
+      if (!st) return;
+      var prev = hud.seen[id];
+      hud.seen[id] = st;
+      // First sighting, the same object, or a reconnect replaying an old change: nothing to show.
+      if (!prev || prev === st || prev.state === st.state) return;
+      var v = num(st.state);
+      if (v === null || num(prev.state) === null) return;
+      if (Math.abs(Date.now() - Date.parse(st.last_changed)) > 10000) return;
+      if (current || document.hidden || Prefs.get("volume_hud") === "off") return;
+      if (!hud.el || !hud.el.isConnected) { hud.el = document.createElement("echo-volume-hud"); document.body.appendChild(hud.el); }
+      hud.el.show(ch, v);
+    });
+  }
+  setInterval(watchVolume, 200);
 
   // ---------- public API ----------
   window.EchoShow = {
@@ -9823,6 +9897,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.12.0", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.14.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.12.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.13.0", cards: ["echo-show-common 1.8.0","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.14.0","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.13.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

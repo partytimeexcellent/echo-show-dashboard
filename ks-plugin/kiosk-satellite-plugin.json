@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "echo-volume-buttons",
+  "name": "Echo Volume Buttons",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "minAndroidSdk": 24,
+  "entryClass": "io.github.partytimeexcellent.echoshow.VolumeButtonsPlugin",
+  "description": "Takes over the hardware volume buttons. A press changes the device volume, or the assistant volume while a voice reply is playing, and holding a button speeds up. Turn on Kiosk > Disable volume buttons so the system doesn't change the volume as well. Part of the Echo Show Dashboard.",
+  "author": "partytimeexcellent",
+  "license": "MIT",
+  "capabilities": [
+    "overlay",
+    "host.read",
+    "host.control"
+  ],
+  "settings": [
+    {
+      "key": "buttons",
+      "type": "select",
+      "title": "Volume buttons change",
+      "default": "Device volume",
+      "options": [
+        "Device volume",
+        "Media volume"
+      ],
+      "group": "Buttons",
+      "description": "Device volume is the overall level. Media volume is music's share of it, so it can't go louder than the device volume."
+    },
+    {
+      "key": "voiceReply",
+      "type": "boolean",
+      "title": "Assistant volume during a voice reply",
+      "default": true,
+      "group": "Buttons",
+      "description": "While the assistant is talking (and for a few seconds after), the buttons change only the assistant's voice."
+    },
+    {
+      "key": "step",
+      "type": "number",
+      "title": "Step per press",
+      "default": 7,
+      "min": 1,
+      "max": 20,
+      "step": 1,
+      "unit": "%",
+      "group": "Buttons",
+      "description": "The device volume has about 15 levels, so 7% moves it one level."
+    },
+    {
+      "key": "faster",
+      "type": "boolean",
+      "title": "Speed up while held",
+      "default": true,
+      "group": "Buttons",
+      "description": "Holding a button steps faster the longer it's held."
+    },
+    {
+      "key": "showLevel",
+      "type": "boolean",
+      "title": "Show the level in a small window",
+      "default": false,
+      "group": "Display",
+      "description": "The Echo Show Dashboard shows the level on its own. Turn this on for other dashboards."
+    }
+  ]
+}

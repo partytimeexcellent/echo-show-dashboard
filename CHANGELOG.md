@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.13.0
+
+- **Volume buttons.** New Kiosk Satellite plugin, Echo Volume Buttons (`ks-plugin/`, needs Kiosk Satellite 2026.10.9): the hardware buttons change the device volume, or the assistant volume while it's answering, and step faster while held. Install the ZIP from `ks-plugin/dist/` on each display through Remote Admin → Plugin Manager → Developer Tools, and turn on Kiosk → Disable volume buttons. See `ks-plugin/README.md`.
+- The dashboard shows a level bar at the top of the screen when this display's device, assistant or media volume changes from outside the settings panel (the buttons, a voice command, an automation). Settings → Display → "Volume level when it changes" turns it off.
+
 ## 1.12.0
 
 - Browse on the media page opens on **Radio**, now its own tab next to Local library and Spotify (it was the first filter of Local library). It has a search box for station names.
