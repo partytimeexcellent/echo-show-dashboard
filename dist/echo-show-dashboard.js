@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.11.3
+ * Echo Show Dashboard 1.11.4
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.3, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 1.7.1, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.13.4, echo-climate-card 1.0.2, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -5052,7 +5052,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.13.3";
+  var VERSION = "1.13.4";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -6176,11 +6176,13 @@
     var id = String(st.attributes.media_content_id || "");
     if (!/^library:\/\/radio\//.test(id) || !this._config.ma_config_entry) return list;
     var self = this;
-    if (!this._logos && !(this._logosAt > Date.now() - 300000)) {
+    // (Re)read the stations when there are none yet, or when this one was added since (at most once a minute).
+    var known = this._logos && this._logos[id] !== undefined;
+    if (!known && !(this._logosAt > Date.now() - (this._logos ? 60000 : 300000))) {
       this._logosAt = Date.now();
       this._maCall("get_library", { media_type: "radio", limit: 500, offset: 0 }).then(function (r) {
         var m = {};
-        (r.items || []).forEach(function (x) { if (x.uri && typeof x.image === "string" && x.image) m[x.uri] = fixImg(x.image); });
+        (r.items || []).forEach(function (x) { if (x.uri) m[x.uri] = typeof x.image === "string" && x.image ? fixImg(x.image) : ""; });
         self._logos = m;
         if (self._hass && self._built) self._paint();
       }, function () { /* try again in a few minutes */ });
@@ -9742,6 +9744,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.11.3", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.3","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.11.3 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.11.4", cards: ["echo-show-common 1.7.1","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.13.4","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.11.4 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.4
+
+- A radio station added to Music Assistant while a display is showing gets its logo without reloading the display (the station list is re-read, at most once a minute, when a station isn't in it).
+
 ## 1.11.3
 
 - Radio from Music Assistant showed no picture for up to a song while Music Assistant looked for the album art: its stand-in picture is the station logo through its own image proxy, which stalls. The media page now falls back to the station's logo from the library (as Browse shows it), and skips any picture that hasn't loaded after 4 seconds.
