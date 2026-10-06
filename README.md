@@ -98,34 +98,6 @@ Import each one with Settings → Automations → Blueprints → **Import bluepr
 
 ---
 
-### 6. Natural voice answers (optional)
-
-Assist reads numbers the way the entity stores them, so "what's the bedroom temperature?" gets "73.688 °F" and the weather is "69.4 °F and clear". These files make it answer the way a person would: "Bedroom temperature is 74 degrees", "69 degrees and partly cloudy", "45 percent", "2.5 kilowatt hours".
-
-1. Copy [`homeassistant/custom_templates/voice.jinja`](homeassistant/custom_templates/voice.jinja) to `<config>/custom_templates/`.
-2. Copy [`homeassistant/custom_sentences/en/voice_responses.yaml`](homeassistant/custom_sentences/en/voice_responses.yaml) to `<config>/custom_sentences/en/` (create the folders if they don't exist).
-3. Restart Home Assistant.
-
-It changes the spoken answer of the built-in intents only: an entity's state (`HassGetState`), the weather (`HassGetWeather`), the thermostat's temperature (`HassClimateGetTemperature`) and its confirmation (`HassClimateSetTemperature`). Temperatures are whole degrees, percentages whole, other units spelled out (`kWh` → "kilowatt hours", `mph` → "miles per hour") with sensible rounding, and states like `not_home` or `heat_cool` read as "away" and "heat and cool".
-
-**"What's the temperature?" from the room you're in.** Out of the box, Assist only looks for a thermostat in the room of the display you ask, and hands the question to the AI agent when there is none. [`packages/voice.yaml`](homeassistant/packages/voice.yaml) answers it instead: the room's own temperature sensor (CPU and "device temperature" sensors are skipped), else the average of the other rooms on its floor, else the thermostat. "How warm is it in the bedroom?" and "what's the temperature upstairs?" ask for a room or floor, and "outside" gives the weather. Copy it to `<config>/packages/` (or paste its automation into a new UI automation in YAML mode).
-
-The macros work in any template, for your own TTS automations:
-
-```jinja
-{% from 'voice.jinja' import say_state, say_weather, say_value %}
-It's {{ say_weather('weather.home') }}. The garage is {{ say_state('sensor.garage_temperature') }}.
-```
-
-For questions an AI agent answers itself (forecasts, follow-ups), add this to the agent's instructions:
-
-```
-You are speaking out loud. Say numbers the way a person would: round temperatures to whole
-degrees and say "degrees" without F or C ("73 degrees", not "73.4 °F"); round percentages
-to whole numbers and say "percent"; spell out units ("miles per hour", "kilowatt hours");
-never read symbols, entity ids or underscores aloud. Keep answers to one or two short sentences.
-```
-
 ## Several Echo Shows
 
 One dashboard serves every display, and a new display works on its own with nothing to configure. Each display finds everything from its Kiosk Satellite name ("Kitchen Echo Show 5" → `kitchen_echo_show_5`):
