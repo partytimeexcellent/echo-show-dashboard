@@ -106,7 +106,9 @@ Assist reads numbers the way the entity stores them, so "what's the bedroom temp
 2. Copy [`homeassistant/custom_sentences/en/voice_responses.yaml`](homeassistant/custom_sentences/en/voice_responses.yaml) to `<config>/custom_sentences/en/` (create the folders if they don't exist).
 3. Restart Home Assistant.
 
-It changes the spoken answer of the built-in intents only: an entity's state (`HassGetState`), the weather (`HassGetWeather`), the thermostat's temperature (`HassClimateGetTemperature`) and its confirmation (`HassClimateSetTemperature`). Temperatures are whole degrees, percentages whole, other units spelled out (`kWh` → "kilowatt hours", `mph` → "miles per hour") with sensible rounding, and states like `not_home` or `heat_cool` read as "away" and "heat and cool". Pipelines using an AI agent with **Prefer handling commands locally** on get these answers too for anything the built-in intents understand.
+It changes the spoken answer of the built-in intents only: an entity's state (`HassGetState`), the weather (`HassGetWeather`), the thermostat's temperature (`HassClimateGetTemperature`) and its confirmation (`HassClimateSetTemperature`). Temperatures are whole degrees, percentages whole, other units spelled out (`kWh` → "kilowatt hours", `mph` → "miles per hour") with sensible rounding, and states like `not_home` or `heat_cool` read as "away" and "heat and cool".
+
+The file also makes "what's the temperature?" (and "how warm is it inside?") read the thermostat. Without it, Assist looks for a thermostat in the room of the display you're talking to, finds none in a kitchen or office, and hands the question to the AI agent. Change `name: Thermostat` to your thermostat's name. Pipelines using an AI agent with **Prefer handling commands locally** on get these answers too for anything the built-in intents understand.
 
 The macros work in any template, for your own TTS automations:
 
