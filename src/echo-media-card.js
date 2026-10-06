@@ -8,7 +8,7 @@
  *  - Now playing: album art left, info + controls right. Without art the info block
  *    re-centres and grows to fill the screen.
  *  - Speakers panel: group / ungroup rooms, per-speaker volume and mute.
- *  - Browse: Music Assistant library (radio first) and Spotify (via Music Assistant).
+ *  - Browse: radio (with a SomaFM station menu), the Music Assistant library and Spotify.
  *  - Queue: live from the Music Assistant server when ma_url + ma_token are set.
  *  - Goes back to the home view after a timeout, but never while music is playing.
  *
@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.13.4";
+  var VERSION = "1.14.0";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -301,7 +301,6 @@
 
   // Music Assistant media types shown as filter chips in the Library tab.
   var LIB_TYPES = [
-    { t: "radio", label: "Radio" },
     { t: "playlist", label: "Playlists" },
     { t: "artist", label: "Artists" },
     { t: "album", label: "Albums" },
@@ -317,7 +316,10 @@
     { t: "recent", label: "Recently played" },
   ];
   var SPOT_IMG = /scdn\.co|spotifycdn/;
-  var TYPE_ICON = { playlist: "mdi:playlist-music", artist: "mdi:account-music", album: "mdi:album", track: "mdi:music-note", radio: "mdi:radio", podcast: "mdi:podcast", audiobook: "mdi:book-music", favorite: "mdi:star" };
+  // SomaFM stations ("SomaFM: Groove Salad") get their own menu behind one tile in the Radio tab.
+  var SOMA = /^soma\s*fm\b\s*:?\s*/i;
+  var SOMA_URI = /^somafm/i;
+  var TYPE_ICON = { playlist: "mdi:playlist-music", artist: "mdi:account-music", album: "mdi:album", track: "mdi:music-note", radio: "mdi:radio", somafm: "mdi:radio", podcast: "mdi:podcast", audiobook: "mdi:book-music", favorite: "mdi:star" };
   var SEARCH_SECTIONS = [["tracks", "Songs"], ["albums", "Albums"], ["artists", "Artists"], ["playlists", "Playlists"], ["radio", "Radio"], ["podcasts", "Podcasts"], ["audiobooks", "Audiobooks"]];
 
   // ---------- direct Music Assistant connection (live queue) ----------
@@ -507,7 +509,7 @@
     self._volLocal = {};     // entity -> { v, until } while dragging / waiting for HA
     self._pendGroup = {};    // room index -> timestamp of a join/unjoin in flight
     self._localSlug = null;  // this display's Kiosk Satellite name; its own player becomes a room of its own
-    self._br = { tab: "lib", ltype: "radio", stype: "playlist", sort: "name", q: "", items: [], offset: 0, more: false, loading: false, req: 0, stack: [] };
+    self._br = { tab: "radio", ltype: "playlist", stype: "playlist", sort: "name", q: "", items: [], offset: 0, more: false, loading: false, req: 0, stack: [] };
     self._stCache = null;
     // Keep touch gestures inside this card so the kiosk's swipe-between-views doesn't fire.
     ["touchstart", "touchmove", "touchend", "touchcancel"].forEach(function (type) {
@@ -580,6 +582,8 @@
       page_size: c.page_size || 60,
       quick_favorites: c.quick_favorites !== undefined ? c.quick_favorites : 8,
       spotify_prefix: c.spotify_prefix || "spotify",
+      somafm: c.somafm !== false,
+      somafm_logo: c.somafm_logo || "/local/resources/radio-logos/SomaFM-logo.png",
       local_volume: c.local_volume === "media" ? "media" : "device",
       ma_urls: c.ma_url ? [].concat(c.ma_url) : [],
       ma_token: c.ma_token || null,
@@ -797,7 +801,7 @@
     var a = st.attributes, id = String(a.media_content_id || "");
     if (a.app_id === "music_assistant" || a.mass_player_type) {
       if (/^spotify/.test(id)) return ["mdi:spotify", "Spotify"];
-      if (/^(tunein|radiobrowser)/.test(id) || a.media_content_type === "radio") return ["mdi:radio", "Radio"];
+      if (/^(tunein|radiobrowser|somafm)/.test(id) || a.media_content_type === "radio") return ["mdi:radio", "Radio"];
       if (/^library:\/\/radio/.test(id)) return ["mdi:radio", "Radio"];
       if (/^library/.test(id)) return ["mdi:bookshelf", "Library"];
       if (/^(filesystem|smb)/.test(id)) return ["mdi:folder-music", "Library"];
@@ -1360,6 +1364,7 @@
         if (!it) break;
         if (ev && ev.target.closest && ev.target.closest(".more")) this._openSheet(it);
         else if (it.kind === "ma" && (it.mtype === "artist" || it.mtype === "album")) this._openView(it);
+        else if (it.mtype === "somafm") this._openView(it);
         else if (it.row) this._playFrom(parseInt(el.getAttribute("data-k").slice(1), 10));
         else this._play(it, null, false);
         break;
@@ -1845,6 +1850,7 @@
     var self = this;
     this._brEl.innerHTML =
       '<div class="ovh">' +
+      '<div class="tab" role="button" data-act="tab" data-t="radio"><ha-icon icon="mdi:radio"></ha-icon>Radio</div>' +
       '<div class="tab" role="button" data-act="tab" data-t="lib"><ha-icon icon="mdi:bookshelf"></ha-icon>Local library</div>' +
       '<div class="tab" role="button" data-act="tab" data-t="spot"><ha-icon icon="mdi:spotify"></ha-icon>Spotify</div>' +
       '<div class="grow"></div><div class="tgt" role="button" data-act="target-pick"></div>' +
@@ -1887,16 +1893,19 @@
     var vw = this._view();
     if (vw) {
       var ar = vw.item, isArtist = ar.mtype === "artist", srcName = /^library:/.test(ar.id) ? "Library" : "Spotify";
-      f = '<div class="ah"><div class="ib" role="button" data-act="view-back"><ha-icon icon="mdi:arrow-left"></ha-icon></div>' +
+      if (ar.mtype === "somafm") f = '<div class="ah"><div class="ib" role="button" data-act="view-back"><ha-icon icon="mdi:arrow-left"></ha-icon></div>' +
+        '<div class="av sq"' + (ar.img ? ' style="background-image:url(&quot;' + esc(ar.img) + '&quot;)"' : "") + '></div>' +
+        '<div style="min-width:0"><div class="an">' + esc(ar.title) + '</div><div class="as">' + esc(ar.sub) + "</div></div></div>";
+      else f = '<div class="ah"><div class="ib" role="button" data-act="view-back"><ha-icon icon="mdi:arrow-left"></ha-icon></div>' +
         '<div class="av' + (isArtist ? "" : " sq") + '"' + (ar.img ? ' style="background-image:url(&quot;' + esc(ar.img) + '&quot;)"' : "") + '></div>' +
         '<div style="min-width:0"><div class="an">' + esc(ar.title) + '</div><div class="as">' +
         esc(isArtist ? "Artist · " + srcName : (ar.artist ? ar.artist + " · " : "") + "Album · " + srcName) + "</div></div></div>" +
         (isArtist ? '<div class="go mix" role="button" data-act="view-play"><ha-icon icon="mdi:shuffle-variant"></ha-icon>Play artist mix</div>' :
           '<div class="go mix alt" role="button" data-act="view-shuffle"><ha-icon icon="mdi:shuffle-variant"></ha-icon>Shuffle</div>' +
           '<div class="go mix" role="button" data-act="view-play"><ha-icon icon="mdi:play"></ha-icon>Play album</div>');
-    } else if (br.tab === "lib" || br.tab === "spot") {
+    } else {
       f += '<div class="srch"><ha-icon icon="mdi:magnify"></ha-icon><input type="search" enterkeyhint="search" placeholder="' +
-        (br.tab === "spot" ? "Search Spotify" : "Search your library") + '" value="' + esc(br.q) + '">' +
+        (br.tab === "spot" ? "Search Spotify" : br.tab === "radio" ? "Search radio stations" : "Search your library") + '" value="' + esc(br.q) + '">' +
         (br.q ? '<ha-icon class="clr" role="button" data-act="clear" icon="mdi:close-circle"></ha-icon>' : "") + "</div>";
     }
     if (br.tab === "lib" && !vw) {
@@ -1943,7 +1952,8 @@
     if (reset) this._gridEl.innerHTML = '<div class="msg">Loading…</div>';
     var p;
     var top = this._view();
-    if (top) p = top.item.mtype === "artist" ? this._artistAlbums(top.item) : this._albumTracks(top.item);
+    if (top) p = top.item.mtype === "somafm" ? this._somaList() : top.item.mtype === "artist" ? this._artistAlbums(top.item) : this._albumTracks(top.item);
+    else if (br.tab === "radio") p = this._radioList(br.q);
     else if (br.tab === "lib") p = br.q ? this._maSearch(br.q, "library") : this._maLibrary(br.ltype, br.offset, br.sort, "");
     else p = br.q ? this._maSearch(br.q, "spotify") : this._spotifyLib(br.stype, br.offset);
     p.then(function (res) {
@@ -1954,6 +1964,12 @@
       br.more = !!res.more;
       self._renderGrid(!reset, res.items);
       // Spotify pages are filtered down from the whole library: keep going while the grid is short.
+      if (res.soma) res.soma.then(function (tile) {
+        // SomaFM found through Music Assistant search after the stations were shown: put its tile first.
+        if (!tile || req !== br.req || self._view()) return;
+        br.items.unshift(tile);
+        self._renderGrid(false, []);
+      });
       if (br.tab === "spot" && br.more && br.items.length < 18 && (br.chain = (reset ? 0 : br.chain || 0) + 1) < 6) self._loadPage(false);
     }, function (err) {
       if (req !== br.req) return;
@@ -1969,7 +1985,7 @@
       if (!br.items.length && br.more) { this._gridEl.innerHTML = '<div class="msg">Loading…</div>'; return; }
       if (!br.items.length) {
         var vn = this._view();
-        var none = vn ? (vn.item.mtype === "artist" ? "No albums found for " : "No songs found on ") + vn.item.title : br.q ? "No results for “" + br.q + "”" :
+        var none = vn && vn.item.mtype === "somafm" ? "No SomaFM stations found in Music Assistant" : vn ? (vn.item.mtype === "artist" ? "No albums found for " : "No songs found on ") + vn.item.title : br.q ? "No results for “" + br.q + "”" :
           br.tab === "spot" ? "Nothing from Spotify here yet. Save music in Spotify, or search for it above." : "Nothing here yet";
         this._gridEl.innerHTML = '<div class="msg">' + esc(none) + "</div>";
         return;
@@ -2131,6 +2147,69 @@
     var p = this._maLibrary("radio", 0, "name", "").then(function (r) { return r.items; });
     this._stCache = { t: Date.now(), p: p };
     p.then(null, function () { self._stCache = null; });
+    return p;
+  };
+
+  // Radio tab: the library's stations, with SomaFM's folded into one "SomaFM" tile up front.
+  // SomaFM stations that aren't in the library are found by searching its provider (below);
+  // that tile is added when the search comes back, so the other stations don't wait for it.
+  EchoMediaCard.prototype._radioList = function (q) {
+    var self = this, c = this._config;
+    var p = this._maCall("get_library", { media_type: "radio", limit: 500, offset: 0, order_by: "sort_name", search: q || undefined });
+    return p.then(function (r) {
+      var all = (r.items || []).filter(function (x) { return x.name; }), soma = [], rest = [];
+      all.forEach(function (x) { (c.somafm && !q && SOMA.test(x.name) ? soma : rest).push(x); });
+      var items = rest.map(maTile), res = { items: items, more: false };
+      if (!c.somafm || q) return res;
+      if (soma.length) {
+        self._soma = { t: Date.now(), p: Promise.resolve(soma.map(somaTile).sort(byTitle)) };
+        items.unshift(self._somaTile(soma.length));
+      } else {
+        res.soma = self._somaStations().then(function (list) { return list.length ? self._somaTile(list.length) : null; }, function () { return null; });
+      }
+      return res;
+    });
+  };
+
+  EchoMediaCard.prototype._somaTile = function (n) {
+    return { kind: "folder", mtype: "somafm", id: "somafm", title: "SomaFM", sub: n + " stations", img: this._config.somafm_logo };
+  };
+
+  function byTitle(a, b) { return a.title.toLowerCase() < b.title.toLowerCase() ? -1 : 1; }
+
+  function somaTile(x) {
+    var t = maTile(x);
+    t.title = String(x.name).replace(SOMA, "") || x.name;
+    t.sub = "SomaFM";
+    return t;
+  }
+
+  EchoMediaCard.prototype._somaList = function () {
+    return this._somaStations().then(function (list) { return { items: list, more: false }; });
+  };
+
+  // SomaFM's stations as Music Assistant tiles, A–Z. Its provider can only be listed through
+  // search, which matches station names, so a few searches together cover all of them. Cached 10 min.
+  EchoMediaCard.prototype._somaStations = function () {
+    var self = this;
+    if (this._soma && Date.now() - this._soma.t < 600000) return this._soma.p;
+    var qs = ["a", "e", "i", "o", "u", "y"];
+    var p = Promise.all(qs.map(function (q) {
+      return self._maCall("search", { name: q, media_type: ["radio"], limit: 100 }).then(function (r) { return r.radio || []; }, function () { return []; });
+    })).then(function (lists) {
+      var seen = {}, out = [];
+      lists.forEach(function (l) {
+        l.forEach(function (x) {
+          if (!x.name || !x.uri || seen[x.uri] || !(SOMA_URI.test(x.uri) || SOMA.test(x.name))) return;
+          seen[x.uri] = 1;
+          out.push(somaTile(x));
+        });
+      });
+      out.sort(byTitle);
+      return out;
+    });
+    this._soma = { t: Date.now(), p: p };
+    p.then(null, function () { self._soma = null; });
     return p;
   };
 

@@ -1,4 +1,4 @@
-// Browse screen: Local library (Radio first) and Spotify, no Sonos favorites; quick row of radio stations.
+// Browse screen: Radio (with the SomaFM menu), Local library and Spotify, no Sonos favorites; quick row of radio stations.
 //   NODE_PATH=$(npm root -g) node test/browse.js
 const { chromium } = require("playwright");
 const path = require("path");
@@ -24,10 +24,32 @@ const path = require("path");
   await p.evaluate(() => card._openBrowse());
   await p.waitForTimeout(500);
   const tabs = (await txt(".tab")).map((t) => t.replace(/^[A-Z]{1,2}(?=[A-Z][a-z])/, ""));
-  check(tabs.join("|") === "Local library|Spotify", "tabs: " + tabs.join("|"));
-  check((await txt(".fc:not(.sort)")).join("|") === "Radio|Playlists|Artists|Albums|Tracks|Podcasts", "library chips: " + (await txt(".fc:not(.sort)")).join("|"));
-  check(await p.evaluate(() => card._br.ltype === "radio" && /KRVM-FM/.test(card._gridEl.textContent)), "opens on Radio with the stations");
-  await p.screenshot({ path: out("browse-library-radio") });
+  check(tabs.join("|") === "Radio|Local library|Spotify", "tabs: " + tabs.join("|"));
+  check(await p.evaluate(() => card._br.tab === "radio" && /KRVM-FM/.test(card._gridEl.textContent)), "opens on Radio with the stations");
+  await p.waitForTimeout(700);
+  let tl = (await txt(".tile .tt")).join("|");
+  check(tl === "SomaFM|KRVM-FM 1|KWVA 2", "SomaFM tile (found by search) goes first: " + tl);
+  check(await p.evaluate(() => (card._brEl.querySelector(".tile img") || {}).getAttribute("src") === "/local/resources/radio-logos/SomaFM-logo.png"), "SomaFM tile uses the logo");
+  await p.screenshot({ path: out("browse-radio") });
+  await p.evaluate(() => card._brEl.querySelector(".tile").click());
+  await p.waitForTimeout(500);
+  tl = (await txt(".tile .tt")).join("|");
+  check(tl === "Beat Blender|DEF CON Radio|Drone Zone|Groove Salad|Indie Pop Rocks!|Lush|Secret Agent|Space Station Soma", "SomaFM menu lists its stations A-Z without the prefix: " + tl);
+  check(/SomaFM/.test(await p.evaluate(() => card._ovfEl.textContent)) && !(await p.evaluate(() => card._ovfEl.querySelector("input"))), "SomaFM header, no search box");
+  await p.screenshot({ path: out("browse-somafm") });
+  await p.evaluate(() => { calls.length = 0; card._brEl.querySelectorAll(".tile")[3].click(); });
+  let pm = await p.evaluate(() => calls.filter((c) => c[1] === "play_media").map((c) => c[2].media_type + ":" + c[2].media_id).join());
+  check(pm === "radio:somafm://radio/groovesalad", "tapping a SomaFM station plays it (" + pm + ")");
+  await p.evaluate(() => card._openBrowse());
+  await p.waitForTimeout(300);
+  await p.evaluate(() => card._brEl.querySelector('[data-act="view-back"]').click());
+  await p.waitForTimeout(300);
+  check((await txt(".tile .tt")).join("|") === "SomaFM|KRVM-FM 1|KWVA 2", "back returns to the Radio list");
+
+  await p.evaluate(() => card._brEl.querySelector('.tab[data-t="lib"]').click());
+  await p.waitForTimeout(500);
+  check((await txt(".fc:not(.sort)")).join("|") === "Playlists|Artists|Albums|Tracks|Podcasts", "library chips: " + (await txt(".fc:not(.sort)")).join("|"));
+  await p.screenshot({ path: out("browse-library") });
 
   await p.evaluate(() => card._brEl.querySelector('.tab[data-t="spot"]').click());
   await p.waitForTimeout(600);
@@ -51,10 +73,10 @@ const path = require("path");
   check(await p.evaluate(() => calls.some((c) => c[0] === "browse" && c[1] === "playlist" && c[2] === "library://playlist/7")), "liked songs: browses the Liked Songs playlist");
 
   // Playing a station goes through Music Assistant.
-  await p.evaluate(() => { card._brEl.querySelector('.tab[data-t="lib"]').click(); });
+  await p.evaluate(() => { card._brEl.querySelector('.tab[data-t="radio"]').click(); });
   await p.waitForTimeout(500);
-  await p.evaluate(() => { calls.length = 0; card._brEl.querySelector('.tile').click(); });
-  const pm = await p.evaluate(() => calls.filter((c) => c[1] === "play_media").map((c) => c[0] + ":" + c[2].media_type + ":" + c[2].media_id).join());
+  await p.evaluate(() => { calls.length = 0; card._brEl.querySelectorAll('.tile')[1].click(); });
+  pm = await p.evaluate(() => calls.filter((c) => c[1] === "play_media").map((c) => c[0] + ":" + c[2].media_type + ":" + c[2].media_id).join());
   check(/music_assistant:radio:library:\/\/radio\/KRVM-FM1/.test(pm), "tapping a station plays it via Music Assistant (" + pm + ")");
   const fx = await p.evaluate(() => { const f = customElements.get("echo-media-card")._fixImg, L = { protocol: "https:", origin: "https://ha.example.com" };
     return [f("http://192.168.1.211:8123/local/resources/radio-logos/KLCC-logo.png", L), f("http://192.168.1.211:8123/local/a.png", { protocol: "http:", origin: "http://x" }), f("https://i.scdn.co/x", L), f("http://example.com/logo.png", L), f("", L)]; });
@@ -69,6 +91,21 @@ const path = require("path");
   await p.evaluate((px) => { card._artKey = null; card._wantArt(["http://10.255.255.1/stalls.png", px]); }, px);
   await p.waitForTimeout(5500);
   check(await p.evaluate((px) => card._artUrl === px && !card._npEl.classList.contains("noart"), px), "a picture that stalls or fails is skipped for the next one");
+  // SomaFM stations in the library: the tile holds those, with no search.
+  await p.goto(url + "?somalib#media"); await p.waitForTimeout(800);
+  await p.evaluate(() => { card.setConfig(Object.assign({}, card._raw, { ma_config_entry: "abc", players: [{ name: "Kitchen", entity: "media_player.kitchen", ma_entity: "media_player.kitchen_ma" }] })); card.hass = card._hass; calls.length = 0; card._openBrowse(); });
+  await p.waitForTimeout(600);
+  tl = (await txt(".tile .tt")).join("|");
+  check(tl === "SomaFM|KRVM-FM 1|KWVA 2" && /2 stations/.test(await p.evaluate(() => card._gridEl.textContent)), "library SomaFM stations fold into the tile: " + tl);
+  await p.evaluate(() => card._brEl.querySelector(".tile").click());
+  await p.waitForTimeout(300);
+  tl = (await txt(".tile .tt")).join("|");
+  check(tl === "Drone Zone|Groove Salad" && !(await p.evaluate(() => calls.some((c) => c[0] === "search"))), "menu shows the library's SomaFM stations: " + tl);
+  await p.evaluate(() => card._brEl.querySelector('[data-act="view-back"]').click());
+  await p.evaluate(() => { const i = card._ovfEl.querySelector("input"); i.value = "soma"; i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); });
+  await p.waitForTimeout(400);
+  tl = (await txt(".tile .tt")).join("|");
+  check(tl === "SomaFM: Drone Zone|SomaFM: Groove Salad", "radio search finds stations by name: " + tl);
   check(errs.length === 0, "no page errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close();
   process.exit(fail ? 1 : 0);

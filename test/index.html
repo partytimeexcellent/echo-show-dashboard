@@ -215,8 +215,19 @@ var hass = {
         album: [mk("Legend", sp, 1), mk("Rumours", lo, 2), mk("Ancient Future", sp, 3)],
         artist: [mk("Ween", sp, 1), mk("311", lo, 2)],
         track: [mk("A Song", lo, 1)] }[T] || [];
+      if (T === "radio" && /[?&]somalib/.test(location.search)) lib = lib.concat([mk("SomaFM: Drone Zone", "http://r/dz.png", ""), mk("SomaFM: Groove Salad", "http://r/gs.png", "")]);
+      if (T === "radio" && gd.search) lib = lib.filter(function (x) { return x.name.toLowerCase().indexOf(gd.search.toLowerCase()) !== -1; });
       if (T === "playlist" && gd.search) lib = [{ media_type: "playlist", uri: "library://playlist/7", name: "Liked Songs someone", image: "https://misc.scdn.co/liked-songs/liked-songs-64.png" }];
       return Promise.resolve({ response: { items: lib } });
+    } if (m.type === "call_service" && m.domain === "music_assistant" && m.service === "search" && (m.service_data.media_type || []).join() === "radio") {
+      // SomaFM's provider matches its station names; TuneIn is there to be left out.
+      var sq = m.service_data.name.toLowerCase();
+      calls.push(["search", "radio", sq]);
+      var soma = ["Groove Salad", "Drone Zone", "Lush", "Secret Agent", "DEF CON Radio", "Space Station Soma", "Indie Pop Rocks!", "Beat Blender"].map(function (n) {
+        return { media_type: "radio", uri: "somafm://radio/" + n.replace(/\W/g, "").toLowerCase(), name: "SomaFM: " + n, image: "" }; });
+      var rr = soma.filter(function (x) { return x.name.slice(8).toLowerCase().indexOf(sq) !== -1; })
+        .concat([{ media_type: "radio", uri: "tunein://radio/s1", name: "Some " + sq + " station", image: "" }]);
+      return new Promise(function (res) { setTimeout(function () { res({ response: { radio: rr } }); }, 300); });
     } if (m.type === "media_player/browse_media" && m.media_content_type === "playlist") {
       calls.push(["browse", m.media_content_type, m.media_content_id]);
       return Promise.resolve({ children: [1, 2, 3].map(function (i) { return { title: "Someone - Liked Song " + i, can_play: true, media_content_id: "spotify://track/" + i, thumbnail: "" }; }) });

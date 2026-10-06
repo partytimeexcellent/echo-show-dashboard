@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.12.0
+
+- Browse on the media page opens on **Radio**, now its own tab next to Local library and Spotify (it was the first filter of Local library). It has a search box for station names.
+- SomaFM: its stations are one "SomaFM" tile at the front of Radio, with the SomaFM logo (`/local/resources/radio-logos/SomaFM-logo.png`, or set `somafm_logo`). Tapping it opens a menu of SomaFM's stations, A–Z without the "SomaFM:" prefix. The menu holds the SomaFM stations saved in the Music Assistant library; with none saved, it lists every station of Music Assistant's SomaFM provider. `somafm: false` turns this off.
+- Music Assistant radio from SomaFM shows "Radio" as its source on the now-playing page.
+
 ## 1.11.4
 
 - A radio station added to Music Assistant while a display is showing gets its logo without reloading the display (the station list is re-read, at most once a minute, when a station isn't in it).
