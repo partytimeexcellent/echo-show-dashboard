@@ -1,0 +1,125 @@
+blueprint:
+  name: Echo Show timers - timer finished
+  description: >-
+    When a timer finishes on a Kiosk Satellite display: wake its screen, open the Clock page's
+    timers and turn its volume up to the alarm level. Kiosk Satellite itself rings the timer
+    chime (Voice Satellite › Chimes), at the assistant volume. The volume goes back when the
+    alert is dismissed (a tap, "stop", the dashboard's Stop button) or the timer is cancelled.
+
+    ONE automation covers every display: the display is the one whose timer rang (the
+    event's device_id), and its volume, screensaver button and dashboard-view select are
+    found among that device's entities.
+
+    Needs Kiosk Satellite 2026.10.14 or later with Voice Satellite running natively, and
+    input_number.echo_timer_alarm_volume from packages/echo_show.yaml of the Echo Show
+    Dashboard repository (the settings panel's Timers tab sets it).
+  domain: automation
+  source_url: https://github.com/partytimeexcellent/echo-show-dashboard/blob/main/homeassistant/blueprints/automation/echo_show/timer_finished.yaml
+  input:
+    timers_view:
+      name: Timers view
+      description: Dashboard view to open, as the Kiosk Satellite "Dashboard view" select takes it.
+      default: echo-show/timers
+      selector:
+        text: {}
+    alarm_volume:
+      name: Alarm volume helper
+      default: input_number.echo_timer_alarm_volume
+      selector:
+        entity:
+          domain: input_number
+    volume:
+      name: Volume to raise
+      description: The timer chime plays at the assistant volume, unless Kiosk Satellite plays its sounds on a media player.
+      default: assistant_volume
+      selector:
+        select:
+          options:
+            - label: Assistant volume
+              value: assistant_volume
+            - label: Device volume
+              value: volume
+
+mode: parallel
+max: 10
+
+variables:
+  view: !input timers_view
+  alarm_vol: !input alarm_volume
+  which: !input volume
+  dev: "{{ trigger.event.data.device_id | default('', true) }}"
+  tid: "{{ trigger.event.data.timer_id | default('', true) }}"
+
+triggers:
+  - trigger: event
+    event_type: esphome.kiosk_satellite_timer
+    event_data:
+      event_type: finished
+
+conditions:
+  - condition: template
+    value_template: "{{ dev | length > 0 }}"
+
+actions:
+  - variables:
+      ents: "{{ device_entities(dev) | list }}"
+  - variables:
+      vol: >-
+        {% set p = 'number\\..*_assistant_volume$' if which == 'assistant_volume' else 'number\\.(?!.*_(assistant|media)_volume$).*_volume$' %}{{ ents | select('match', p) | first | default('', true) }}
+      btn: "{{ ents | select('match', 'button\\..*_postpone_screensaver$') | first | default('', true) }}"
+      sel: "{{ ents | select('match', 'select\\..*_dashboard_view$') | first | default('', true) }}"
+  # Remembered for this run only. A second timer that finishes while the first still rings finds
+  # the alarm volume already set and leaves restoring it to the first run.
+  - variables:
+      saved_volume: "{{ states(vol) | float(none) if vol and states(vol) | float(-1) != states(alarm_vol) | float(100) else none }}"
+  - if:
+      - condition: template
+        value_template: "{{ vol | length > 0 }}"
+    then:
+      - action: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: "{{ vol }}"
+        data:
+          value: "{{ states(alarm_vol) | float(100) }}"
+  - if:
+      - condition: template
+        value_template: "{{ btn | length > 0 }}"
+    then:
+      - action: button.press
+        continue_on_error: true
+        target:
+          entity_id: "{{ btn }}"
+  - if:
+      - condition: template
+        value_template: "{{ sel | length > 0 }}"
+    then:
+      - action: select.select_option
+        continue_on_error: true
+        target:
+          entity_id: "{{ sel }}"
+        data:
+          option: "{{ view }}"
+  - alias: Wait for the alert on this display to be dismissed, or this timer to be cancelled
+    repeat:
+      sequence:
+        - wait_for_trigger:
+            - trigger: event
+              event_type: esphome.kiosk_satellite_timer
+          timeout:
+            minutes: 30
+          continue_on_timeout: true
+      until:
+        - condition: template
+          value_template: >-
+            {% set d = wait.trigger.event.data if wait.trigger else none %}{{ d is none or (d.device_id == dev and d.event_type == 'dismissed') or (d.timer_id == tid and d.event_type == 'cancelled') }}
+  - if:
+      - condition: template
+        value_template: "{{ vol | length > 0 and saved_volume is not none }}"
+    then:
+      - action: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: "{{ vol }}"
+        data:
+          value: "{{ saved_volume }}"

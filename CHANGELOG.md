@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.16.0
+
+- **Timers are Kiosk Satellite's own.** The Clock page's Timers tab, the countdown over the other pages and the button badges now show each display's Kiosk Satellite timers (2026.10.14 or later, Voice Satellite running natively): the same list as the timers set by voice and the pills on the screen. On the display the dashboard uses Kiosk Satellite's JavaScript API, so taps act at once; in a desktop browser or the HA app it uses the display's `esphome.<node>_vs_*` actions and its VS Timers / VS Next timer sensors. Starting a timer goes through `vs_start_timer`. The display's ESPHome node is found from its name (`node:` under `echo_show: devices:` sets it).
+- No more limit of three: four or more timers show as a grid, and with three or more, + gives the new-timer wheels the whole page. A new timer can have a name (a field under the wheels, or a named preset like `{name: Pasta, minutes: 10}`). Timers started here always get a name no other timer on the display has ("10 min", "10 min 2"), since Home Assistant finds timers by name; when two spoken timers can't be told apart, the page says so instead of failing silently.
+- A ringing timer shows **Stop**, which silences Kiosk Satellite's alert (`vs_cancel`, after the assistant finishes speaking), and **+1 min**. The dashboard no longer rings timers itself, so a timer never rings twice.
+- New blueprint **Timer finished** (`timer_finished.yaml`): on Kiosk Satellite's `finished` timer event, wakes that display, opens its timers page and turns its assistant volume up to the alarm level until the alert is dismissed. It replaces **Timer alarm**; **Timer voice commands** is gone too (Home Assistant's own timer commands work per display).
+- Removed: the timer helpers and the `echo_timer_start` / `echo_timer_cancel` scripts from `packages/echo_show.yaml` (only the alarm volume is left), `custom_templates/echo_timers.jinja`, the settings panel's "Set up timers for this display" button, and the Clock card's `timer_prefix`, `slots`, `start_script`, `cancel_script`, `alarm`, `tone_entity` and `satellite` options. Buttons take `timers: true` (an old list of timer entities still works). Settings › Timers shows the display's timer status, a **Mute timer alerts** switch (VS Mute timers) and the alarm volume.
+- Needs Kiosk Satellite 2026.10.14 or later on every display that shows timers; an older one says to update.
+
 ## 1.15.1
 
 - The "Nothing playing" page's radio grid puts **SomaFM** in its last slot (five stations, then SomaFM), opening the same SomaFM station menu as Browse. The SomaFM stations don't take other slots. `somafm: false` turns this off.

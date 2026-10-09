@@ -8,6 +8,8 @@
  *    Satellite app's Home Assistant entities and only show when they exist.
  *  - Timer overlay (<echo-timer-overlay>): a large countdown on the other pages while a
  *    timer is running.
+ *  - This display's timers (EchoShow.timers): Kiosk Satellite's own, from its JavaScript API on
+ *    the kiosk and from its ESPHome actions in Home Assistant elsewhere.
  *  - Per-display preferences (stored in this browser) that the cards read.
  *
  * Dashboard config (optional, top level of the raw dashboard config):
@@ -16,13 +18,14 @@
  *     devices:                          # per-display overrides, matched on the device name
  *       - match: office
  *         device: office_echo_show_8
+ *         node: office_echo_show_8      # its ESPHome node (esphome.<node>_vs_*); auto-detected
  *
  * Plain JavaScript, no dependencies, no build step. ES5-ish for older Chromium.
  */
 (function () {
   "use strict";
 
-  var VERSION = "1.9.0";
+  var VERSION = "2.0.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -233,24 +236,25 @@
     return (esCfg && esCfg.device) || null;
   }
 
-  // ---------- this display's own timer set: timer.<device>_timer_1..3 + input_text.<device>_timer_N_name ----------
+  // ---------- this display's Kiosk Satellite device (entity prefix), found once per page ----------
   var ownSlug;                          // undefined until asked, then the device slug (or null)
-  function timerSetOf(slug) { return slug ? slug + "_timer" : null; }
-  function hasTimerSet(hass, prefix) { return !!(prefix && hass && hass.states["timer." + prefix + "_1"]); }
-  // The display's own timer prefix when its helpers exist, else null (cards then use their configured timers).
+  var ownProf = null;                   // its echo_show.devices entry, if any
   // Synchronous for render code: the first call starts the lookup and the next hass update has the answer.
-  function ownTimerPrefix(hass) {
+  function ownDevice(hass) {
     if (!hass) return null;
     if (ownSlug === undefined) {
       ownSlug = null;
       Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
-        ownSlug = resolveDevice(hass, r[0], (r[1] || {}).echo_show) || null;
+        var es = (r[1] || {}).echo_show;
+        ownProf = es ? matchDisplay(es.devices, r[0]) : null;
+        ownSlug = resolveDevice(hass, r[0], es) || null;
+        if (es && es.node && !(ownProf && ownProf.node)) ownProf = { node: es.node };
         // Cards re-render with their own timers and area once this is known.
         if (ownSlug) window.dispatchEvent(new CustomEvent("echo-show-device", { detail: { device: ownSlug } }));
+        tmEmit();
       }, function () { /* stays null */ });
     }
-    var p = timerSetOf(ownSlug);
-    return hasTimerSet(hass, p) ? p : null;
+    return ownSlug;
   }
   // The Home Assistant area of an entity (its own, else its device's).
   function areaOf(hass, id) {
@@ -260,7 +264,7 @@
   }
   // This display's area: the first of its Kiosk Satellite entities that has one.
   function ownArea(hass) {
-    ownTimerPrefix(hass);               // starts the device lookup
+    ownDevice(hass);                    // starts the device lookup
     if (!ownSlug || !hass || !hass.entities) return null;
     for (var id in hass.entities) {
       var o = id.slice(id.indexOf(".") + 1) + "_";
@@ -269,6 +273,281 @@
       if (a) return a;
     }
     return null;
+  }
+
+  // ---------- this display's timers: Kiosk Satellite's own (native Voice Satellite, 2026.10.14+) ----------
+  // One list per page, shared by the Clock card, the countdown overlay and the button badges.
+  //  - On the kiosk: window.kioskSatellite.getVoiceTimers() and the kiosksatellite:voice-timers event,
+  //    changed with controlVoiceTimer(). Listening only while something subscribes (cached views).
+  //  - Anywhere else (a desktop browser, the HA app): the display's VS Timers / VS Next timer sensors
+  //    say when to re-read esphome.<node>_vs_list_timers; changes go through the vs_* actions.
+  // Starting a timer always goes through esphome.<node>_vs_start_timer (there is no JS start).
+  // HA finds a timer by its name (or its starting length when unnamed), so every timer the
+  // dashboard starts gets a name no other timer on the kiosk has.
+  var TM = { list: [], sig: "", subs: [], hass: null, node: undefined, nodeFor: null, kioskOn: false, sensors: "", busy: false, again: false, poll: null, err: null };
+  function tmKiosk() { return !!(window.kioskSatellite && window.kioskSatellite.getVoiceTimers); }
+  function tmTokens(s) { return String(s || "").split("_").filter(function (x) { return x; }); }
+  // The ESPHome node of this display: its devices entry's node:, else the node of any vs_* action that
+  // matches the entity prefix best (same name, else the most shared words), so "ks_samsung_s20" goes with
+  // samsung_s20_kiosk. Every node with Voice Satellite actions is a candidate, also ones on an older Kiosk
+  // Satellite without the timer actions, so a display never borrows another display's timers.
+  function tmNode(hass) {
+    var slug = ownDevice(hass);
+    if (!slug || !hass || !hass.services) return null;
+    if (TM.nodeFor === slug && TM.node) return TM.node;      // a miss is looked up again (actions may load later)
+    var es = hass.services.esphome || {}, nodes = {}, k, m;
+    for (k in es) { m = /^(.+)_vs_(wake|cancel|show|start_timer|list_timers)$/.exec(k); if (m) nodes[m[1]] = true; }
+    var best = null, bestScore = 0, tie = false;
+    if (ownProf && ownProf.node) best = ownProf.node;
+    else if (nodes[slug]) best = slug;
+    else {
+      var st = tmTokens(slug);
+      for (k in nodes) {
+        var nt = tmTokens(k), shared = nt.filter(function (t) { return st.indexOf(t) !== -1; }).length;
+        var score = shared * 2 - (nt.length - shared);
+        // A word with a digit is a model or a number ("5", "s20"): one the display's name lacks rules the node out.
+        var clash = nt.some(function (t) { return /\d/.test(t) && st.indexOf(t) === -1; });
+        if (clash || shared < 1 || score <= 0) continue;
+        if (score > bestScore) { best = k; bestScore = score; tie = false; } else if (score === bestScore) tie = true;
+      }
+      if (tie) best = null;
+    }
+    TM.nodeFor = slug;
+    TM.node = best && es[best + "_vs_list_timers"] ? best : null;
+    TM.nodeSeen = best;   // matched, perhaps without the timer actions (Kiosk Satellite too old)
+    return TM.node;
+  }
+  function tmItem(t, at) {
+    var ends = t.ends_at ? Date.parse(t.ends_at) : 0;
+    return { id: String(t.timer_id || ""), name: String(t.name || ""), total: Math.round(+t.total_seconds || 0), left: +t.seconds_left || 0,
+      active: !!t.is_active && !t.finished, finished: !!t.finished, ends: isNaN(ends) ? 0 : ends, at: at };
+  }
+  function tmSet(timers) {
+    var at = Date.now(), list = (timers || []).map(function (t) { return tmItem(t, at); });
+    var sig = JSON.stringify(list.map(function (t) { return [t.id, t.name, t.total, t.active, t.finished, Math.round(t.ends / 1000), t.active ? 0 : Math.round(t.left)]; }));
+    TM.list = list;
+    if (sig === TM.sig) return;
+    TM.sig = sig;
+    tmEmit();
+  }
+  function tmEmit() { TM.subs.slice().forEach(function (cb) { try { cb(); } catch (e) { /* a card's problem */ } }); }
+  function tmOnKiosk(ev) { tmSet(ev && ev.detail ? ev.detail.timers : []); }
+  function tmKioskRead() {
+    var r;
+    try { r = window.kioskSatellite.getVoiceTimers(); } catch (e) { return; }
+    Promise.resolve(r).then(function (v) { if (v && TM.kioskOn) tmSet(v.timers); }, function () { /* keep the last list */ });
+  }
+  function tmSensors(hass, slug) {
+    return [devEnt(hass, slug, "sensor", "vs_timers"), devEnt(hass, slug, "sensor", "vs_next_timer")];
+  }
+  // Off the kiosk: read the list again (one request at a time, and once more if asked meanwhile).
+  function tmFetch() {
+    var hass = TM.hass, node = tmNode(hass);
+    if (!node || tmKiosk()) return;
+    if (TM.busy) { TM.again = true; return; }
+    TM.busy = true;
+    hass.callWS({ type: "call_service", domain: "esphome", service: node + "_vs_list_timers", service_data: {}, return_response: true }).then(function (r) {
+      TM.err = null;
+      tmSet(r && r.response ? r.response.timers : []);
+    }, function (e) { TM.err = (e && e.message) || "error"; }).then(function () {
+      TM.busy = false;
+      if (TM.again) { TM.again = false; tmFetch(); }
+    });
+  }
+  function tmPoll() {
+    // The sensors miss some changes (pausing a timer that isn't the soonest, dismissing an alert),
+    // so the list is also re-read every 15 s while it has timers and someone is looking.
+    var want = !tmKiosk() && TM.subs.length && TM.list.length;
+    if (want && !TM.poll) TM.poll = setInterval(function () { if (!document.hidden) tmFetch(); }, 15000);
+    if (!want && TM.poll) { clearInterval(TM.poll); TM.poll = null; }
+  }
+  // Called with every hass update (by the cards and the overlay).
+  function tmHass(hass) {
+    if (!hass) return;
+    TM.hass = hass;
+    if (tmKiosk()) return;
+    var slug = ownDevice(hass);
+    if (!slug || !tmNode(hass)) return;
+    var ids = tmSensors(hass, slug), sig = ids.map(function (id) { var s = id && hass.states[id]; return s ? s.state + "@" + s.last_updated : ""; }).join("|");
+    if (sig !== TM.sensors) { TM.sensors = sig; tmFetch(); }
+    tmPoll();
+  }
+  function tmSubscribe(cb) {
+    TM.subs.push(cb);
+    if (tmKiosk() && !TM.kioskOn) {
+      TM.kioskOn = true;
+      window.addEventListener("kiosksatellite:voice-timers", tmOnKiosk);
+      tmKioskRead();
+    } else if (TM.subs.length === 1 && TM.hass) { TM.sensors = ""; tmHass(TM.hass); }   // back on a cached view: re-read
+    return function () {
+      var i = TM.subs.indexOf(cb);
+      if (i !== -1) TM.subs.splice(i, 1);
+      if (!TM.subs.length && TM.kioskOn) { TM.kioskOn = false; window.removeEventListener("kiosksatellite:voice-timers", tmOnKiosk); }
+      tmPoll();
+    };
+  }
+  function tmLeft(t, now) {
+    if (!t) return 0;
+    if (t.finished) return 0;
+    if (t.active) return Math.max(0, t.ends ? (t.ends - (now || Date.now())) / 1000 : t.left - ((now || Date.now()) - t.at) / 1000);
+    return Math.max(0, t.left);
+  }
+  // 600 -> "10 min", 90 -> "1 min 30 sec"
+  function fmtLen(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = Math.round(sec % 60), out = [];
+    if (h) out.push(h + " hr");
+    if (m) out.push(m + " min");
+    if (s) out.push(s + " sec");
+    return out.slice(0, 2).join(" ") || "0 sec";
+  }
+  function tmLabel(t) {
+    var n = String(t.name || "").trim();
+    return n ? n.charAt(0).toUpperCase() + n.slice(1) : fmtLen(t.total) + " timer";
+  }
+  // A name no other timer on the kiosk has (case doesn't count): "Pasta", "10 min", "10 min 2".
+  function tmUniqueName(base) {
+    base = String(base || "").trim().slice(0, 40) || "Timer";
+    var taken = {};
+    TM.list.forEach(function (t) { if (!t.finished) taken[String(t.name).toLowerCase()] = true; });   // HA drops finished ones
+    if (!taken[base.toLowerCase()]) return base;
+    for (var i = 2; i < 100; i++) if (!taken[(base + " " + i).toLowerCase()]) return base + " " + i;
+    return base + " " + Date.now() % 1000;
+  }
+  // Another timer that HA can't tell apart from this one (same name, or both unnamed with the same length).
+  function tmClash(id) {
+    var t = TM.list.filter(function (x) { return x.id === id; })[0];
+    if (!t) return false;
+    var n = t.name.toLowerCase();
+    return TM.list.some(function (x) { return x.id !== id && (n ? x.name.toLowerCase() === n : !x.name && x.total === t.total); });
+  }
+  function hms(sec) { sec = Math.max(0, Math.round(sec)); return { hours: Math.floor(sec / 3600), minutes: Math.floor(sec / 60) % 60, seconds: sec % 60 }; }
+  function tmCall(service, data) {
+    var hass = TM.hass, node = tmNode(hass);
+    if (!node) return Promise.reject(new Error("This display has no Kiosk Satellite timer actions in Home Assistant."));
+    return hass.callWS({ type: "call_service", domain: "esphome", service: node + "_" + service, service_data: data || {} }).then(function (r) {
+      setTimeout(tmFetch, 300);
+      return r;
+    });
+  }
+  var TM_SERVICE = { pause: "vs_pause_timer", resume: "vs_resume_timer", cancel: "vs_cancel_timer", add: "vs_add_time", remove: "vs_remove_time" };
+  // action: pause / resume / cancel / add / remove (add and remove take seconds). Rejects when it fails.
+  function tmControl(id, action, secs) {
+    if (tmKiosk() && window.kioskSatellite.controlVoiceTimer) {
+      var r;
+      try { r = window.kioskSatellite.controlVoiceTimer(id, action, secs ? hms(secs) : undefined); } catch (e) { return Promise.reject(e); }
+      return Promise.resolve(r).then(function (ok) {
+        if (ok === false) throw new Error("Kiosk Satellite couldn't change the timer.");
+        tmKioskRead();
+        return true;
+      });
+    }
+    var data = { timer_id: id };
+    if (action === "add" || action === "remove") { var d = hms(secs); data.hours = d.hours; data.minutes = d.minutes; data.seconds = d.seconds; }
+    return tmCall(TM_SERVICE[action], data);
+  }
+  function tmStart(name, secs) {
+    var d = hms(secs);
+    return tmCall("vs_start_timer", { name: tmUniqueName(name), hours: d.hours, minutes: d.minutes, seconds: d.seconds }).then(function (r) {
+      if (tmKiosk()) tmKioskRead();
+      return r;
+    });
+  }
+  // Silences ringing timers. vs_cancel also ends a voice turn, so while the assistant is listening or
+  // answering on this display it waits (up to 20 s) for it to finish.
+  function tmStop() {
+    var hass = TM.hass, slug = ownDevice(hass), vs = slug ? devEnt(hass, slug, "sensor", "voice_satellite") : null;
+    var t0 = Date.now();
+    return new Promise(function (res) {
+      (function go() {
+        var s = vs && TM.hass.states[vs] ? TM.hass.states[vs].state : "idle";
+        if (/listening|processing|responding/.test(s) && Date.now() - t0 < 20000) { setTimeout(go, 500); return; }
+        res(tmCall("vs_cancel", {}));
+      })();
+    });
+  }
+  // Is this display set up for Kiosk Satellite timers? "ok", "old" (Kiosk Satellite without the timer
+  // actions), "none" (no Voice Satellite actions found) or "unknown" (display not found yet).
+  function tmStatus(hass) {
+    if (tmKiosk() && tmNode(hass)) return "ok";
+    var slug = ownDevice(hass);
+    if (!slug) return tmKiosk() ? "ok" : "unknown";
+    if (tmNode(hass)) return "ok";
+    return TM.nodeSeen ? "old" : "none";
+  }
+
+  var Timers = {
+    hass: tmHass,
+    subscribe: tmSubscribe,
+    list: function () { return TM.list.slice(); },
+    left: tmLeft,
+    label: tmLabel,
+    fmtLen: fmtLen,
+    control: tmControl,
+    start: tmStart,
+    stop: tmStop,
+    clash: tmClash,
+    uniqueName: tmUniqueName,
+    node: function (hass) { return tmNode(hass || TM.hass); },
+    status: function (hass) { return tmStatus(hass || TM.hass); },
+    refresh: function () { if (tmKiosk()) tmKioskRead(); else tmFetch(); },
+  };
+
+  // ---------- timer badges on the bottom buttons (weather, media, climate pages) ----------
+  // A button with `timers: true` shows the soonest countdown, or "Done" while one rings.
+  // open_on_done / open_on_start: jump to the button's page when a timer finishes or a new one
+  // starts (by voice, say). Only changes seen while the page shows count: the first update after
+  // the page opens just takes a snapshot (a timer started on another page isn't "new").
+  function fmtCountdown(sec) {
+    sec = Math.max(0, Math.ceil(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
+  }
+  function badgeButtons(card) {
+    var b = (card._config && card._config.buttons) || [], out = [];
+    for (var i = 0; i < b.length; i++) if (b[i].timers) out.push(i);
+    return out;
+  }
+  function badgePaint(card) {
+    if (!card.shadowRoot) return;
+    // The soonest running timer, else the shortest paused one.
+    var list = TM.list, done = list.some(function (t) { return t.finished; }), now = Date.now();
+    var run = list.filter(function (t) { return t.active; }), paused = list.filter(function (t) { return !t.active && !t.finished; });
+    var pick = run.length ? run : paused;
+    var soon = pick.length ? Math.min.apply(null, pick.map(function (t) { return tmLeft(t, now); })) : null;
+    var txt = done ? "Done" : soon !== null ? fmtCountdown(soon) : "";
+    badgeButtons(card).forEach(function (i) {
+      var el = card.shadowRoot.querySelector('.bdg[data-i="' + i + '"]');
+      if (!el) return;
+      if (el.textContent !== txt) el.textContent = txt;
+      if (done !== el.classList.contains("done")) el.classList.toggle("done");
+    });
+  }
+  function badgeUpdate(card) {
+    if (!card._config || !badgeButtons(card).length) return;
+    if (card._hass) tmHass(card._hass);
+    if (card.isConnected && !card._tmUnsub) card._tmUnsub = tmSubscribe(function () { badgeUpdate(card); });
+    var ids = TM.list.filter(function (t) { return !t.finished; }).map(function (t) { return t.id; });
+    var done = TM.list.some(function (t) { return t.finished; });
+    var armed = !!card._tmSeen && card.isConnected;
+    if (!card.isConnected) card._tmSeen = null;
+    else {
+      if (armed) {
+        var started = ids.some(function (id) { return card._tmSeen.run.indexOf(id) === -1; });
+        var bt = (card._config.buttons || [])[badgeButtons(card)[0]];
+        if (bt && bt.navigation_path && ((done && !card._tmSeen.done && bt.open_on_done) || (started && bt.open_on_start))) card._buttonTap(bt);
+      }
+      card._tmSeen = { run: ids, done: done };
+    }
+    badgePaint(card);
+    var tick = TM.list.some(function (t) { return t.active; });
+    if (tick && !card._badgeTick) card._badgeTick = setInterval(function () { badgePaint(card); }, 1000);
+    if (!tick && card._badgeTick) { clearInterval(card._badgeTick); card._badgeTick = null; }
+  }
+  // From the card's disconnectedCallback.
+  function badgeDetach(card) {
+    if (card._tmUnsub) { card._tmUnsub(); card._tmUnsub = null; }
+    if (card._badgeTick) { clearInterval(card._badgeTick); card._badgeTick = null; }
+    card._tmSeen = null;
   }
 
   // ---------- settings panel ----------
@@ -738,42 +1017,24 @@
   };
 
   EchoShowSettings.prototype._tab_timers = function () {
-    var h = "", p = timerSetOf(this._device), ts = this._tset || {};
-    if (this._device && !hasTimerSet(this._hass, p)) {
-      h += '<div class="sec">This display\'s timers</div>' +
-        '<div class="note warn">This display is using the shared timers, so its timers also show on other displays that have no set of their own.</div>' +
-        '<div class="btns"><div class="bt go' + (ts.busy ? " busy" : "") + '" role="button" data-a="tset"><ha-icon icon="mdi:timer-plus-outline"></ha-icon>' +
-        (ts.busy ? "Setting up…" : "Set up timers for this display") + "</div></div>" +
-        (ts.err ? '<div class="note warn">' + esc(ts.err) + "</div>" : "");
-    } else if (ts.done) {
-      h += '<div class="note">This display now has its own timers (timer.' + esc(p) + "_1 to _3).</div>";
+    var h = '<div class="sec">This display\'s timers</div>', stt = Timers.status(this._hass), node = Timers.node(this._hass);
+    if (stt === "ok") {
+      h += '<div class="note">Timers live in Kiosk Satellite on this display' + (node ? " (ESPHome node <b>" + esc(node) + "</b>)" : "") +
+        ": the ones you ask for by voice and the ones started on the Clock page are the same list.</div>";
+    } else if (stt === "old") {
+      h += '<div class="note warn">Update Kiosk Satellite on this display to 2026.10.14 or later to see and start its timers here.</div>';
+    } else if (stt === "none") {
+      h += '<div class="note warn">Home Assistant has no Kiosk Satellite timer actions for this display' + (this._name ? ' ("' + esc(this._name) + '")' : "") +
+        ". In Kiosk Satellite, run Voice Satellite natively and turn on Settings › ESPHome › Expose kiosk entities (2026.10.14 or later). " +
+        "If its ESPHome node name differs a lot from its name, add <b>node: &lt;node name&gt;</b> to its entry under echo_show: devices: in the dashboard's raw config.</div>";
+    } else {
+      h += this._noDevice();
     }
-    return h + '<div class="sec">Alarm</div><div class="alarm"></div>' +
-      '<div class="note">Volume and tone are shared by every display and by the "alarm when finished" automation.</div>';
-  };
-  // Creates timer.<device>_timer_1..3 and input_text.<device>_timer_1..3_name. Home Assistant only lets an
-  // administrator create helpers, so a display signed in as another user gets told what to create instead.
-  EchoShowSettings.prototype._timerSetup = function () {
-    var self = this, h = this._hass, slug = this._device, p = timerSetOf(slug);
-    if (!slug || (this._tset && this._tset.busy)) return;
-    var label = slugify(this._name) === slug ? String(this._name) : slug.replace(/_/g, " ").replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
-    this._tset = { busy: true };
-    this._refresh(false);
-    var steps = [];
-    [1, 2, 3].forEach(function (i) {
-      if (!h.states["timer." + p + "_" + i]) steps.push({ type: "timer/create", name: label + " Timer " + i, icon: "mdi:timer-outline", duration: "00:05:00", restore: true });
-      if (!h.states["input_text." + p + "_" + i + "_name"]) steps.push({ type: "input_text/create", name: label + " Timer " + i + " Name", icon: "mdi:label-outline", min: 0, max: 40, mode: "text" });
-    });
-    steps.reduce(function (pr, msg) { return pr.then(function () { return h.callWS(msg); }); }, Promise.resolve()).then(function () {
-      self._tset = { done: true };
-      if (self._tab === "timers") self._refresh(true);
-    }, function (e) {
-      var m = (e && (e.message || e.code)) || "";
-      self._tset = { err: /unauthor|admin|permission/i.test(m) || (e && e.code === "unauthorized")
-        ? "Only a Home Assistant administrator can create timers. Sign this display in as an admin once and tap the button again, or create timer." + p + "_1 to _3 and input_text." + p + "_1_name to _3_name under Settings › Devices & services › Helpers."
-        : "Couldn't create the timers: " + (m || "no answer from Home Assistant.") };
-      if (self._tab === "timers") self._refresh(false);
-    });
+    var mt = this._device ? this._dev("switch", "vs_mute_timers") : null;
+    if (mt) h += this._switchRow("Mute timer alerts", "A finished timer shows its alert without the sound", this._isOn(mt), "toggle", ' data-id="' + esc(mt) + '"');
+    return h + '<div class="sec">Alarm volume</div><div class="alarm"></div>' +
+      '<div class="note">While a timer rings, the "Timer finished" automation (blueprint timer_finished.yaml) turns this display\'s assistant volume up to this level and puts it back when the alert stops. ' +
+      "The sound is the timer chime under Voice Satellite › Chimes in Kiosk Satellite.</div>";
   };
   EchoShowSettings.prototype._mountAlarm = function () {
     var host = this._bodyEl.querySelector(".alarm");
@@ -788,10 +1049,9 @@
     }
     var es = (this._es && this._es.timers) || {};
     for (k in es) cfg[k] = es[k];
-    // "Test" plays at the alarm volume on this display's own speaker.
-    var dv = this._device ? this._dev("number", "volume") : null;
-    if (dv) cfg.device_volume_entity = dv;
-    if (this._ctx.timers) cfg.timers = this._ctx.timers;
+    // Kiosk Satellite rings with its own chime: only the volume is set here.
+    cfg.tones = false;
+    cfg.test = false;
     el.embedded = true;
     el.config = cfg;
     host.appendChild(el);
@@ -1065,8 +1325,6 @@
       h.callService("number", "set_value", { entity_id: id, value: parseFloat(v) });
     } else if (a === "press" && id) {
       h.callService("button", "press", { entity_id: id });
-    } else if (a === "tset") {
-      this._timerSetup();
     } else if (a === "reload") {
       var rl = this._device ? this._dev("button", "reload_page") : null;
       if (rl) h.callService("button", "press", { entity_id: rl }); else window.location.reload();
@@ -1145,7 +1403,7 @@
   if (!customElements.get("echo-show-settings")) customElements.define("echo-show-settings", EchoShowSettings);
 
   var current = null;
-  // Open the settings panel from a card. ctx: { tab, timers: [timer ids] }.
+  // Open the settings panel from a card. ctx: { tab, alarm: {clock card settings} }.
   function openSettings(card, ctx) {
     if (current) return current;
     var el = document.createElement("echo-show-settings");
@@ -1188,14 +1446,6 @@
     var ss = (s < 10 ? "0" : "") + s;
     return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m + ":" + ss : m + ":" + ss;
   }
-  function parseDur(s) {
-    if (s === undefined || s === null) return 0;
-    var days = 0, m = String(s).match(/^(\d+) days?, (.*)$/);
-    if (m) { days = parseInt(m[1], 10); s = m[2]; }
-    var p = String(s).split(":");
-    if (p.length !== 3) return 0;
-    return days * 86400 + parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
-  }
 
   function EchoTimerOverlay() {
     var self = Reflect.construct(HTMLElement, [], EchoTimerOverlay);
@@ -1216,10 +1466,13 @@
       this._onPrefs = function () { self._place(); self._paint(); };
     }
     window.addEventListener("echo-show-prefs", this._onPrefs);
+    if (!this._unsub) this._unsub = Timers.subscribe(function () { self._fromList(); });
     this._place();
+    this._fromList();
   };
   EchoTimerOverlay.prototype.disconnectedCallback = function () {
     window.removeEventListener("echo-show-prefs", this._onPrefs);
+    if (this._unsub) { this._unsub(); this._unsub = null; }
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
   };
   // "auto" lets each page pick a spot that doesn't cover its controls (attribute auto-pos).
@@ -1229,23 +1482,19 @@
     ["top-right", "top-left", "bottom-right", "bottom-left", "media"].forEach(function (c) { this.classList.toggle(c, c === pos); }, this);
   };
 
-  // timers: [timer ids]; each may have input_text.<id>_name with its label.
-  EchoTimerOverlay.prototype.update = function (hass, timers) {
+  // The page's card passes every hass update; the list itself comes from this display's Kiosk Satellite.
+  EchoTimerOverlay.prototype.update = function (hass) {
     if (hass && !lastHass) { lastHass = hass; activeTheme = null; applyTheme(); }
     lastHass = hass || lastHass;
-    var st = hass.states, items = [];
-    (timers || []).forEach(function (id) {
-      var t = st[id];
-      if (!t) return;
-      var nmE = st["input_text." + id.split(".")[1] + "_name"];
-      var nm = nmE && nmE.state && nmE.state !== "unknown" && nmE.state !== "unavailable" ? nmE.state : "";
-      var dur = parseDur(t.attributes.duration);
-      if (t.state === "active" && t.attributes.finishes_at) items.push({ s: "active", n: nm || "Timer", end: Date.parse(t.attributes.finishes_at), dur: dur });
-      else if (t.state === "paused") items.push({ s: "paused", n: nm || "Timer", rem: parseDur(t.attributes.remaining), dur: dur });
-      else if (t.state === "idle" && nm) items.push({ s: "done", n: nm, dur: dur });
+    Timers.hass(hass);
+    this._fromList();
+  };
+  EchoTimerOverlay.prototype._fromList = function () {
+    var items = Timers.list().map(function (t) {
+      return { s: t.finished ? "done" : t.active ? "active" : "paused", n: tmLabel(t), t: t, dur: t.total };
     });
-    var order = { done: 0, active: 1, paused: 2 };
-    items.sort(function (a, b) { return (order[a.s] - order[b.s]) || ((a.end || 0) - (b.end || 0)); });
+    var order = { done: 0, active: 1, paused: 2 }, now = Date.now();
+    items.sort(function (a, b) { return (order[a.s] - order[b.s]) || (tmLeft(a.t, now) - tmLeft(b.t, now)); });
     this._items = items;
     this._paint();
     var self = this, live = items.some(function (i) { return i.s === "active"; });
@@ -1261,7 +1510,7 @@
     var h = "", now = Date.now();
     var R = 40, C = 2 * Math.PI * R;
     this._items.forEach(function (it) {
-      var rem = it.s === "active" ? (it.end - now) / 1000 : it.s === "paused" ? it.rem : 0;
+      var rem = tmLeft(it.t, now);
       var f = it.dur > 0 ? clamp(rem / it.dur, 0, 1) : 0;
       var col = it.s === "done" ? "#ff6b61" : it.s === "paused" ? "rgba(255,255,255,.45)" : "var(--es-hi,#ffb340)";
       h += '<div class="t ' + it.s + '"><svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="' + R + '" stroke="rgba(255,255,255,.14)"/>' +
@@ -1373,7 +1622,9 @@
     settingsOpen: function () { return !!current; },
     displayName: echoDisplayName,
     devEnt: devEnt,
-    ownTimerPrefix: ownTimerPrefix,
+    timers: Timers,
+    timerBadges: badgeUpdate,
+    timerBadgesDetach: badgeDetach,
     ownArea: ownArea,
     areaOf: areaOf,
     // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.

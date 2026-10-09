@@ -4,15 +4,16 @@
  *  - Alarms: the Kiosk Satellite app's own alarms. They live on the tablet and ring with no
  *    Home Assistant, network or dashboard; the card lists, adds, edits and switches them.
  *  - Stopwatch: start/stop, laps (best and worst marked), kept per display across reloads.
- *  - Timers: up to three HA timer helpers with countdown rings, pause/resume, adjust and
- *    cancel; new ones are picked on hour/minute/second wheels. Rings with Web Audio.
+ *  - Timers: this display's Kiosk Satellite timers (EchoShow.timers in echo-show-common), the
+ *    same ones voice sets, with countdown rings, pause/resume, adjust and cancel; new ones are
+ *    picked on hour/minute/second wheels. Kiosk Satellite rings them.
  *
  * Plain JavaScript, no dependencies, no build step. ES5-ish for older Chromium.
  */
 (function () {
   "use strict";
 
-  var VERSION = "2.3.0";
+  var VERSION = "3.0.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -21,23 +22,13 @@
   var ADJ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 60];
   var CIRC = 2 * Math.PI * 45;
 
+  function timers() { return window.EchoShow && window.EchoShow.timers; }
+
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
-  // "H:MM:SS" (optionally "N day(s), H:MM:SS") -> seconds
-  function parseDur(s) {
-    if (s === undefined || s === null) return 0;
-    if (typeof s === "number") return s;
-    s = String(s);
-    var days = 0;
-    var m = s.match(/^(\d+) days?, (.*)$/);
-    if (m) { days = parseInt(m[1], 10); s = m[2]; }
-    var p = s.split(":");
-    if (p.length !== 3) return 0;
-    return days * 86400 + parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
-  }
 
   function fmtClock(sec) {
     sec = Math.max(0, Math.ceil(sec));
@@ -205,13 +196,16 @@
 
   // ---------- alarm settings popup (<echo-alarm-settings>) ----------
   // Opened from the timer page's settings button. Everything is stored in HA helpers so
-  // the settings are shared by every screen and by the "alarm when finished" automation.
+  // the settings are shared by every screen and by the "Timer finished" automation.
+  // In the settings panel it shows only the volume (tones: false, test: false): Kiosk Satellite
+  // rings timers with its own chime.
 
   var SET_DEFAULTS = {
     volume_entity: "input_number.echo_timer_alarm_volume",   // device volume while ringing
     tone_entity: "input_select.echo_timer_alarm_tone",
     device_volume_entity: null,                               // e.g. number.<tablet>_volume (for Test)
-    timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"],
+    tones: true,                                              // show the tone grid
+    test: true,                                               // show the Test button
   };
 
   var SET_STYLE = [
@@ -277,8 +271,8 @@
       '<div class="bd"></div><div class="panel"><div class="hd"><h2>Timer alarm</h2><div class="done" role="button">Done</div></div>' +
       '<div class="lbl"><span>Volume</span><span class="vv"></span></div>' +
       '<div class="vrow"><ha-icon icon="mdi:volume-low"></ha-icon><div class="track"><div class="fill"></div></div><ha-icon icon="mdi:volume-high"></ha-icon></div>' +
-      '<div class="lbl"><span>Tone</span></div><div class="tones">' + tones + "</div>" +
-      '<div class="test" role="button"><ha-icon icon="mdi:play"></ha-icon>Test</div>' +
+      (this._cfg.tones ? '<div class="lbl"><span>Tone</span></div><div class="tones">' + tones + "</div>" : "") +
+      (this._cfg.test ? '<div class="test" role="button"><ha-icon icon="mdi:play"></ha-icon>Test</div>' : "") +
       '<div class="dev"></div></div>';
     this._fill = root.querySelector(".fill");
     this._vv = root.querySelector(".vv");
@@ -357,12 +351,8 @@
   };
 
   EchoAlarmSettings.prototype._ringing = function () {
-    var st = this._hass.states, list = this._cfg.timers || [];
-    for (var i = 0; i < list.length; i++) {
-      var t = st[list[i]], n = st["input_text." + list[i].split(".")[1] + "_name"];
-      if (t && t.state === "idle" && n && n.state && n.state !== "unknown" && n.state !== "unavailable") return true;
-    }
-    return false;
+    var T = window.EchoShow && window.EchoShow.timers;
+    return !!T && T.list().some(function (t) { return t.finished; });
   };
 
   // Play one cycle of a tone at the alarm volume (temporarily setting the tablet's
@@ -756,8 +746,28 @@
     ".wheel.hrs.unitd .wi{padding-right:calc(var(--ww,13vh) * .62);}",
     ".wheel.hrs .wu{left:52%;}",
     ".wheel.ampm{width:11vh;}",
-    /* ===== timers (HA timer helpers) ===== */
+    /* ===== timers (this display's Kiosk Satellite timers) ===== */
     ".main{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:stretch;gap:2vh;width:100%;}",
+    /* four or more: a grid of smaller tiles, two rows on screen */
+    ".mgrid{flex:1 1 auto;min-width:0;display:grid;gap:2vh;grid-template-columns:repeat(var(--mcols,3),minmax(0,1fr));grid-auto-rows:calc(50% - 1vh);overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch;}",
+    ".main.many .tile{padding:1.2vh 1.4vh 1.4vh;}",
+    ".main.many .head{font-size:2.8vh;}",
+    ".main.many .sub{font-size:2.1vh;margin-top:.6vh;}",
+    ".main.many .ctl{gap:1.6vh;}",
+    ".main.many .rb{width:7vh;height:7vh;}",
+    ".main.many .rb ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;}",
+    ".main.many .wide{height:7vh;font-size:2.8vh;padding:0 2.4vh;}",
+    ".main.many .adj .big{font-size:6vh;}",
+    ".main.many .atrack{height:7vh;}",
+    ".main.many .atrack .knob{width:5vh;height:5vh;margin:-2.5vh 0 0 -2.5vh;}",
+    ".main.many .ahint,.main.many .adj .delta{font-size:2.2vh;}",
+    ".tname{width:var(--gow,46vh);max-width:94%;height:6.4vh;box-sizing:border-box;border-radius:3.2vh;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.22);color:#fff;font:inherit;font-size:2.8vh;text-align:center;padding:0 2vh;outline:none;-webkit-user-select:text;user-select:text;}",
+    ".tname:focus{border-color:rgba(var(--es-acc-rgb,255,159,10),.7);}",
+    ".tname::placeholder{color:rgba(255,255,255,.4);}",
+    ".tile.tmsg{justify-content:center;gap:2vh;text-align:center;font-size:3vh;color:rgba(255,255,255,.6);}",
+    ".tile.tmsg ha-icon{--mdc-icon-size:12vh;width:12vh;height:12vh;opacity:.4;}",
+    ".tile.tmsg b{font-size:4vh;font-weight:400;color:rgba(255,255,255,.88);}",
+    ".tile.tmsg .msg{max-width:90vh;line-height:1.35;}",
     ".main.solo .tile{background:none;border-color:transparent;box-shadow:none;}",
     ".main.solo .tile.done::before{border-radius:3.6vh;}",
     ".corner{position:absolute;top:-9.6vh;right:0;z-index:3;width:8vh;height:8vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;" +
@@ -953,7 +963,7 @@
     self._sig = "";
     self._tick = null;
     self._pending = {};
-    self._adj = null;                       // { slot, delta } while a timer is being adjusted
+    self._adj = null;                       // { id, delta } while a timer is being adjusted
     self._tw = { h: 0, m: 5, s: 0 };        // the new-timer wheels
     self._sw = swLoad();
     self._alarms = null;                    // last list from the kiosk
@@ -1001,24 +1011,9 @@
     this._prof = prof;
     for (k in this._raw) config[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") config[k] = prof[k];
-    // A configured timer_prefix wins; else this display's own set (timer.<device>_timer_N), else the shared one.
-    this._fixedPrefix = !!(config.timer_prefix || config.slots);
-    var prefix = config.timer_prefix || this._ownPrefix || "echo_timer";
-    var slots = config.slots;
-    if (!slots) {
-      slots = [];
-      for (var i = 1; i <= 3; i++) slots.push({ timer: "timer." + prefix + "_" + i, name: "input_text." + prefix + "_" + i + "_name" });
-    }
     this._config = {
-      timer_prefix: prefix,
-      slots: slots,
-      start_script: config.start_script || "script.echo_timer_start",
-      cancel_script: config.cancel_script || "script.echo_timer_cancel",
-      presets: config.presets || DEFAULT_PRESETS,
+      presets: config.presets || DEFAULT_PRESETS,    // minutes, or {name, minutes} / {name, seconds}
       buttons: config.buttons || [],
-      alarm: config.alarm !== false,                 // sound the timer alarm in this browser
-      tone_entity: config.tone_entity || "input_select.echo_timer_alarm_tone",
-      satellite: config.satellite || null,           // assist_satellite.*: timer alarm pauses while it listens
       idle_timeout: config.idle_timeout !== undefined ? config.idle_timeout : 180,
       idle_path: config.idle_path || null,
       settings: config.settings || {},
@@ -1041,10 +1036,8 @@
       var first = !this._hass;
       this._hass = hass;
       if (!this._config) return;
-      if (!this._fixedPrefix) {
-        var ES = window.EchoShow, own = ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null;
-        if (own && own !== this._ownPrefix) { this._ownPrefix = own; this._applyProfile(this._prof || null); this._sig = ""; }
-      }
+      var T = timers();
+      if (T) T.hass(hass);
       if (!this._built) { this._build(); this._startIdle(); }
       this._update();
       this._alarmState();
@@ -1064,11 +1057,12 @@
     }
     this._startIdle();
     this._subscribeAlarmEvents();
+    this._timersOn();
   };
 
   EchoClockCard.prototype.disconnectedCallback = function () {
     this._stopTick();
-    this._alarmStop();
+    if (this._tmUnsub) { this._tmUnsub(); this._tmUnsub = null; }
     this._stopIdle();
     this._swStopRaf();
     this._closeSheet();
@@ -1078,57 +1072,6 @@
     }
     if (this._adj) { this._adj = null; this._sig = ""; }
     if (this._settingsEl) this._settingsEl.close();
-  };
-
-  // ---------- timer alarm loop ----------
-
-  var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
-
-  // The assist satellite to watch: this display's native Kiosk Satellite one
-  // (assist_satellite.<device>_assist_satellite) when it has one, else the configured one. The configured
-  // one used to come first, so every display paused its timer alarm while the configured display listened.
-  EchoClockCard.prototype._satState = function () {
-    var h = this._hass, st = h ? h.states : null, id = this._config.satellite;
-    if (!st) return null;
-    var slug = this._devSlug;
-    if (slug) {
-      if (this._satAuto && st[this._satAuto] && st[this._satAuto].state !== "unavailable") return st[this._satAuto];
-      this._satAuto = null;
-      for (var k in st) {
-        if (k.indexOf("assist_satellite.") !== 0 || st[k].state === "unavailable") continue;
-        var o = k.slice(17);   // assist_satellite.<area>_<device>_assist_satellite, or assist_satellite.<device>
-        if ((o.indexOf(slug) !== -1 && /_assist_satellite$/.test(o)) || o === slug || o.slice(-slug.length - 1) === "_" + slug) { this._satAuto = k; return st[k]; }
-      }
-    }
-    return id ? st[id] || null : null;
-  };
-
-  EchoClockCard.prototype._voiceBusy = function () {
-    var sat = this._satState();
-    if (sat && VOICE_BUSY[sat.state]) return true;
-    return !!(this._voiceHold && Date.now() < this._voiceHold);
-  };
-
-  EchoClockCard.prototype._alarmCycle = function () {
-    var self = this;
-    if (!this._alarmOn) return;
-    var tone = this._hass && this._hass.states[this._config.tone_entity] ? this._hass.states[this._config.tone_entity].state : "Chime";
-    var len = Sound.cycle(tone);
-    if (!this._voiceBusy()) len = Sound.play(tone, 1) || len;
-    this._alarmTimer = setTimeout(function () { self._alarmCycle(); }, len * 1000);
-  };
-
-  EchoClockCard.prototype._alarmStart = function () {
-    if (this._alarmOn || !this._config.alarm) return;
-    this._alarmOn = true;
-    this._alarmCycle();
-  };
-
-  EchoClockCard.prototype._alarmStop = function () {
-    if (!this._alarmOn) return;
-    this._alarmOn = false;
-    if (this._alarmTimer) { clearTimeout(this._alarmTimer); this._alarmTimer = null; }
-    Sound.hush();
   };
 
   // ---------- go back to the home view after a period without touches ----------
@@ -1244,7 +1187,13 @@
     this._mainEl.addEventListener("click", function (ev) {
       var t = ev.target.closest ? ev.target.closest("[data-act]") : null;
       if (!t) return;
-      self._action(t.getAttribute("data-act"), parseInt(t.getAttribute("data-slot"), 10), t);
+      self._action(t.getAttribute("data-act"), t.getAttribute("data-id"), t);
+    });
+    // The new timer's name: kept across re-renders; Enter closes the keyboard.
+    this._mainEl.addEventListener("input", function (ev) { if (ev.target.classList.contains("tname")) self._tname = ev.target.value; });
+    this._mainEl.addEventListener("keydown", function (ev) { if (ev.key === "Enter" && ev.target.blur) ev.target.blur(); });
+    this._mainEl.addEventListener("focusout", function () {
+      setTimeout(function () { if (self._renderLater && !self._typing() && !self._wheelBusy()) { self._renderLater = false; self._render(); } }, 0);
     });
     var drag = null;
     this._mainEl.addEventListener("pointerdown", function (ev) {
@@ -1278,8 +1227,7 @@
       var sc = {}, k;
       for (k in (btn.settings || {})) sc[k] = btn.settings[k];
       for (k in (self._config.settings || {})) sc[k] = self._config.settings[k];
-      sc.timers = self._config.slots.map(function (s) { return s.timer; });
-      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { timers: sc.timers, alarm: sc });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { alarm: sc });
       else window.EchoAlarmSettingsOpen(self, self._rootEl, sc);
     } else if (btn.navigation_path) {
       navigate(btn.navigation_path);
@@ -1311,11 +1259,11 @@
   // Which tab a visit opens on: Timers when one is ringing or just started (by voice, say),
   // otherwise the tab last used on this display.
   EchoClockCard.prototype._pickTabOnShow = function () {
-    var items = this._hass ? this._slots() : [];
-    var now = Date.now(), want = null;
+    var items = this._hass ? this._timerItems() : [];
+    var want = null;
     for (var i = 0; i < items.length; i++) {
       if (items[i].state === "done") want = "timers";
-      if (items[i].state === "active" && items[i].duration && now - (items[i].finishes - items[i].duration * 1000) < 15000) want = "timers";
+      if (items[i].state === "active" && items[i].duration && items[i].duration - this._left(items[i]) < 15) want = "timers";
     }
     if (!want) {
       var p = window.EchoShow && window.EchoShow.prefs ? window.EchoShow.prefs.get("clock_tab") : null;
@@ -1959,76 +1907,56 @@
     this._sheet = null;
   };
 
-  // ---------- timers (HA timer helpers) ----------
+  // ---------- timers (this display's Kiosk Satellite timers) ----------
 
-  EchoClockCard.prototype._slots = function () {
-    var out = [];
-    var st = this._hass.states;
-    for (var i = 0; i < this._config.slots.length; i++) {
-      var cfg = this._config.slots[i];
-      var t = st[cfg.timer];
-      if (!t) continue;
-      var n = st[cfg.name] ? st[cfg.name].state : "";
-      if (n === "unknown" || n === "unavailable") n = "";
-      var s = t.state;
-      if (s === "idle" && !n) continue; // free slot
-      var a = t.attributes || {};
-      out.push({
-        slot: i + 1,
-        timer: cfg.timer,
-        name: n || "Timer",
-        state: s === "idle" ? "done" : s,
-        duration: parseDur(a.duration),
-        remaining: parseDur(a.remaining),
-        finishes: a.finishes_at ? Date.parse(a.finishes_at) : 0,
-      });
-    }
-    return out;
+  EchoClockCard.prototype._timersOn = function () {
+    var T = timers(), self = this;
+    if (!T || this._tmUnsub) return;
+    this._tmUnsub = T.subscribe(function () { if (self._built) self._update(); });
   };
 
-  EchoClockCard.prototype._item = function (slot) {
+  // The list as the tiles need it: { id, name (label), state: active/paused/done, duration, t (store item) }.
+  EchoClockCard.prototype._timerItems = function () {
+    var T = timers();
+    if (!T) return [];
+    var order = { done: 0, active: 1, paused: 1 };
+    return T.list().map(function (t) {
+      return { id: t.id, name: T.label(t), state: t.finished ? "done" : t.active ? "active" : "paused", duration: t.total, t: t };
+    }).sort(function (a, b) { return order[a.state] - order[b.state]; });
+  };
+
+  EchoClockCard.prototype._item = function (id) {
     var items = this._items || [];
-    for (var i = 0; i < items.length; i++) if (items[i].slot === slot) return items[i];
+    for (var i = 0; i < items.length; i++) if (items[i].id === id) return items[i];
     return null;
   };
 
   EchoClockCard.prototype._left = function (it) {
-    if (!it) return 0;
-    if (it.state === "active") return Math.max(0, (it.finishes - Date.now()) / 1000);
-    if (it.state === "paused") return it.remaining;
-    return 0;
+    var T = timers();
+    return it && T ? T.left(it.t) : 0;
   };
 
   EchoClockCard.prototype._update = function () {
     if (!this._hass) return;
-    var slots = this._slots();
-    var sig = JSON.stringify(slots);
+    var T = timers(), items = this._timerItems();
+    var status = T ? T.status(this._hass) : "none";
+    var sig = status + JSON.stringify(items.map(function (x) { return [x.id, x.name, x.state, x.duration, Math.round(x.t.ends / 1000), x.state === "paused" ? Math.round(x.t.left) : 0]; }));
     if (sig !== this._sig) {
       var wasDone = (this._items || []).some(function (x) { return x.state === "done"; });
       if (this._sig) this._touch();
       this._sig = sig;
-      this._items = slots;
+      this._status = status;
+      this._items = items;
       if (this._adj) {
-        var a = this._item(this._adj.slot);
+        var a = this._item(this._adj.id);
         if (!a || a.state === "done") this._adj = null;
       }
-      var nowDone = slots.some(function (x) { return x.state === "done"; });
+      var nowDone = items.some(function (x) { return x.state === "done"; });
       if (nowDone && !wasDone && this._tab !== "timers" && !this._sheet) this._setTab("timers", false);
       else this._render();
       this._badges();
     }
-    var sat = this._satState();
-    if (sat && VOICE_BUSY[sat.state]) {
-      if (this._alarmOn) Sound.hush();
-      this._voiceHold = Date.now() + 4000;
-    }
-    var ticking = false, ringing = false;
-    for (var i = 0; i < slots.length; i++) {
-      if (slots[i].state === "active") ticking = true;
-      if (slots[i].state === "done") ringing = true;
-    }
-    if (ticking) this._startTick(); else this._stopTick();
-    if (ringing) this._alarmStart(); else this._alarmStop();
+    if (items.some(function (x) { return x.state === "active"; })) this._startTick(); else this._stopTick();
   };
 
   EchoClockCard.prototype._startTick = function () {
@@ -2043,36 +1971,64 @@
 
   EchoClockCard.prototype._render = function () {
     if (!this._built || this._tab !== "timers") return;
-    if (this._wheelBusy()) { this._renderLater = true; return; }
+    if (this._wheelBusy() || this._typing()) { this._renderLater = true; return; }
     var items = this._items || [];
-    var canAdd = items.length < this._config.slots.length;
-    if (!canAdd || !items.length) this._adding = false;
-    var showAdd = canAdd && (!items.length || this._adding);
-    var cols = items.length + (showAdd ? 1 : 0);
     var host = this.shadowRoot.host;
-    this._mainEl.className = "main" + (cols <= 1 ? " solo" : "");
-    host.style.setProperty("--ring", (cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
-    host.style.setProperty("--clock", (cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
+    if (this._status !== "ok" && !items.length) {
+      this._mainEl.className = "main solo";
+      this._mainEl.innerHTML = this._unsupportedHtml();
+      this._twWheels = [];
+      return;
+    }
+    if (!items.length) this._adding = false;
+    var showAdd = !items.length || this._adding;
+    // Adding with three or more timers: the new-timer wheels get the whole page.
+    var only = showAdd && items.length >= 3;
+    var many = !only && items.length >= 4;
+    var cols = only ? 1 : many ? Math.min(3, Math.ceil(items.length / 2)) : items.length + (showAdd ? 1 : 0);
+    this._mainEl.className = "main" + (cols <= 1 && !many ? " solo" : "") + (many ? " many" : "");
+    host.style.setProperty("--ring", (many ? 19 : cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
+    host.style.setProperty("--clock", (many ? 5.2 : cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
     host.style.setProperty("--gow", (cols <= 1 ? 52 : cols === 2 ? 44 : 36) + "vh");
     // Tall wheels: big rows are easier to flick and to land on with a finger.
     host.style.setProperty("--ww", (cols <= 1 ? 20 : cols === 2 ? 15 : 11.6) + "vh");
     host.style.setProperty("--wrow", (cols <= 1 ? 9 : cols === 2 ? 8.2 : 7.4) + "vh");
     host.style.setProperty("--wfs", (cols <= 1 ? 6 : cols === 2 ? 5.2 : 4.6) + "vh");
+    host.style.setProperty("--mcols", String(cols));
 
     var h = "";
-    for (var i = 0; i < items.length; i++) {
-      h += (this._adj && this._adj.slot === items[i].slot) ? this._adjustHtml(items[i]) : this._timerHtml(items[i]);
+    if (!only) {
+      for (var i = 0; i < items.length; i++) {
+        h += (this._adj && this._adj.id === items[i].id) ? this._adjustHtml(items[i], i) : this._timerHtml(items[i], i);
+      }
+      if (many) h = '<div class="mgrid">' + h + "</div>";       // scrolls; the corner button stays outside it
     }
-    if (showAdd) h += this._adderHtml(items.length, cols);
-    if (canAdd && items.length && !showAdd) {
+    if (showAdd) h += this._adderHtml(only ? 0 : items.length, cols);
+    if (items.length && !showAdd) {
       h += '<div class="corner plus" role="button" data-act="add-open"><ha-icon icon="mdi:plus"></ha-icon></div>';
     } else if (showAdd && items.length) {
       h += '<div class="corner" role="button" data-act="add-close"><ha-icon icon="mdi:close"></ha-icon></div>';
     }
     this._mainEl.innerHTML = h;
+    var nin = this._mainEl.querySelector(".tname");
+    if (nin) nin.value = this._tname || "";
     this._mountTimerWheels();
     this._paintAdjust();
     this._paintTimes();
+  };
+
+  // What's missing on this display for timers to show here.
+  EchoClockCard.prototype._unsupportedHtml = function () {
+    var s = this._status, msg;
+    if (s === "old") msg = "Update Kiosk Satellite on this display to 2026.10.14 or later to see and start its timers here.";
+    else if (s === "unknown") msg = "This page doesn't know which display it is on. Open it on a Kiosk Satellite display, or add ?echo_display=&lt;display name&gt; to the address.";
+    else msg = "Home Assistant has no Kiosk Satellite timer actions for this display. In Kiosk Satellite, run Voice Satellite natively and turn on Settings › ESPHome › Expose kiosk entities.";
+    return '<div class="tile tmsg"><ha-icon icon="mdi:timer-off-outline"></ha-icon><b>Timers aren\'t available</b><div class="msg">' + msg + "</div></div>";
+  };
+
+  EchoClockCard.prototype._typing = function () {
+    var ae = this.shadowRoot && this.shadowRoot.activeElement;
+    return !!(ae && ae.classList && ae.classList.contains("tname"));
   };
 
   EchoClockCard.prototype._wheelBusy = function () {
@@ -2081,25 +2037,25 @@
     return false;
   };
 
-  EchoClockCard.prototype._timerHtml = function (it) {
-    var ctl;
+  EchoClockCard.prototype._timerHtml = function (it, n) {
+    var ctl, id = esc(it.id);
     if (it.state === "done") {
       ctl = '<div class="ctl">' +
-        '<div class="wide more" role="button" data-act="more" data-slot="' + it.slot + '">+1 min</div>' +
-        '<div class="wide dismiss" role="button" data-act="cancel" data-slot="' + it.slot + '">Dismiss</div></div>';
+        '<div class="wide more" role="button" data-act="more" data-id="' + id + '">+1 min</div>' +
+        '<div class="wide dismiss" role="button" data-act="stop" data-id="' + id + '">Stop</div></div>';
     } else {
       var paused = it.state === "paused";
       ctl = '<div class="ctl">' +
-        '<div class="rb" role="button" data-act="cancel" data-slot="' + it.slot + '"><ha-icon icon="mdi:close"></ha-icon></div>' +
-        '<div class="rb" role="button" data-act="adjust" data-slot="' + it.slot + '"><ha-icon icon="mdi:plus-minus-variant"></ha-icon></div>' +
-        '<div class="rb ' + (paused ? "play" : "pause") + '" role="button" data-act="' + (paused ? "resume" : "pause") + '" data-slot="' + it.slot + '">' +
+        '<div class="rb" role="button" data-act="cancel" data-id="' + id + '"><ha-icon icon="mdi:close"></ha-icon></div>' +
+        '<div class="rb" role="button" data-act="adjust" data-id="' + id + '"><ha-icon icon="mdi:plus-minus-variant"></ha-icon></div>' +
+        '<div class="rb ' + (paused ? "play" : "pause") + '" role="button" data-act="' + (paused ? "resume" : "pause") + '" data-id="' + id + '">' +
         '<ha-icon icon="' + (paused ? "mdi:play" : "mdi:pause") + '"></ha-icon></div></div>';
     }
-    var gid = "g" + it.slot;
+    var gid = "g" + n;
     var c1 = it.state === "done" ? "#ff7a70" : "var(--es-hi2,#ffc15e)", c2 = it.state === "done" ? "#ff3b30" : "var(--es-acc2,#ff8a00)";
-    return '<div class="tile tcol ' + it.state + '" data-slot="' + it.slot + '">' +
+    return '<div class="tile tcol ' + it.state + '" data-id="' + id + '">' +
       '<div class="head"><span class="dot"></span><span class="nm">' + esc(it.name) + "</span></div>" +
-      '<div class="ring"' + (it.state === "done" ? "" : ' data-act="adjust" data-slot="' + it.slot + '"') + '>' +
+      '<div class="ring"' + (it.state === "done" ? "" : ' data-act="adjust" data-id="' + id + '"') + '>' +
       '<svg viewBox="0 0 100 100"><defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="1" y2="1">' +
       '<stop offset="0" style="stop-color:' + c1 + '"/><stop offset="1" style="stop-color:' + c2 + '"/></linearGradient></defs>' +
       '<circle class="trk" cx="50" cy="50" r="45"/>' +
@@ -2109,28 +2065,41 @@
   };
 
   EchoClockCard.prototype._adjustHtml = function (it) {
-    return '<div class="tile adj ' + it.state + '" data-slot="' + it.slot + '">' +
-      '<div class="head"><span class="nm">Adjust ' + esc(it.name === "Timer" ? "timer" : it.name) + "</span></div>" +
+    var id = esc(it.id);
+    return '<div class="tile adj ' + it.state + '" data-id="' + id + '">' +
+      '<div class="head"><span class="nm">Adjust ' + esc(it.name) + "</span></div>" +
       '<div class="mid2"><div class="big"></div><div class="delta"></div></div>' +
       '<div class="awrap"><div class="atrack"><div class="afill"></div><div class="zero"></div>' +
       '<div class="lm">−</div><div class="lp">+</div><div class="knob"></div></div>' +
       '<div class="ahint">Drag to add or remove time</div></div>' +
-      '<div class="ctl"><div class="wide cancel" role="button" data-act="adj-cancel" data-slot="' + it.slot + '">Cancel</div>' +
-      '<div class="wide apply" role="button" data-act="adj-apply" data-slot="' + it.slot + '">Apply</div></div>' +
+      '<div class="ctl"><div class="wide cancel" role="button" data-act="adj-cancel" data-id="' + id + '">Cancel</div>' +
+      '<div class="wide apply" role="button" data-act="adj-apply" data-id="' + id + '">Apply</div></div>' +
       "</div>";
   };
 
+  // Presets: minutes (5), or named ones ({name: Pasta, minutes: 10} / {name: Eggs, seconds: 390}).
+  function presetOf(p) {
+    if (typeof p === "number") return { secs: p * 60, name: "" };
+    if (!p) return null;
+    var secs = p.seconds !== undefined ? +p.seconds : (+p.minutes || 0) * 60 + (+p.hours || 0) * 3600;
+    return secs > 0 ? { secs: secs, name: String(p.name || "") } : null;
+  }
+
   EchoClockCard.prototype._adderHtml = function (count, cols) {
-    // Recently used lengths, newest first (like iOS); the configured presets until there are any.
-    var rec = recentsLoad(), list = rec.length ? rec : this._config.presets.map(function (m) { return m * 60; });
+    // Named presets always; then recently used lengths, newest first (like iOS), or the plain presets until there are any.
+    var rec = recentsLoad(), named = [], plain = [];
+    this._config.presets.forEach(function (p) { var o = presetOf(p); if (o) (o.name ? named : plain).push(o); });
+    var list = named.concat((rec.length ? rec.map(function (x) { return { secs: x, name: "" }; }) : plain));
     var chips = "", max = cols >= 3 ? 2 : cols === 2 ? 3 : 6;
     for (var i = 0; i < list.length && i < max; i++) {
-      chips += '<div class="chip" role="button" data-act="preset" data-sec="' + list[i] + '">' + esc(fmtLen(list[i])) + "</div>";
+      chips += '<div class="chip" role="button" data-act="preset" data-sec="' + list[i].secs + '" data-name="' + esc(list[i].name) + '">' +
+        esc(list[i].name ? list[i].name + " · " + fmtLen(list[i].secs) : fmtLen(list[i].secs)) + "</div>";
     }
     return '<div class="tile add">' +
       '<div class="cap">' + (count ? "Add a timer" : "New timer") + "</div>" +
       '<div class="wheels tw"></div>' +
-      '<div class="recents"><div class="rlbl">' + (rec.length ? "Recents" : "Quick picks") + '</div><div class="chips">' + chips + "</div></div>" +
+      '<input class="tname" type="text" maxlength="30" placeholder="Name (optional)" autocomplete="off" spellcheck="false">' +
+      '<div class="recents"><div class="rlbl">' + (rec.length || named.length ? "Recents" : "Quick picks") + '</div><div class="chips">' + chips + "</div></div>" +
       '<div class="go" role="button" data-act="start"><ha-icon icon="mdi:play"></ha-icon>Start</div>' +
       "</div>";
   };
@@ -2144,7 +2113,7 @@
       tw.h = self._twWheels[0].value(); tw.m = self._twWheels[1].value(); tw.s = self._twWheels[2].value();
       self._paintAdder();
     }
-    function onSettle() { onSpin(); if (self._renderLater) { self._renderLater = false; self._render(); } }
+    function onSettle() { onSpin(); if (self._renderLater && !self._typing()) { self._renderLater = false; self._render(); } }
     var opts = [["h", 0, 23, "hours", " hrs"], ["m", 0, 59, "min", ""], ["s", 0, 59, "sec", ""]];
     opts.forEach(function (o) {
       var w = new Wheel({ values: range(o[1], o[2]), index: tw[o[0]], unit: o[3], cls: "unitd" + o[4], onSpin: function () { if (self._twWheels.length === 3) onSpin(); }, onChange: onSettle });
@@ -2161,7 +2130,7 @@
     var secs = this._twSecs();
     var chips = this._mainEl.querySelectorAll(".chip");
     for (var i = 0; i < chips.length; i++) {
-      var on = parseInt(chips[i].getAttribute("data-sec"), 10) === secs;
+      var on = parseInt(chips[i].getAttribute("data-sec"), 10) === secs && (chips[i].getAttribute("data-name") || "") === (this._pname || "");
       if (on !== chips[i].classList.contains("sel")) chips[i].classList.toggle("sel");
     }
     var go = this._mainEl.querySelector(".go");
@@ -2171,7 +2140,7 @@
   // ---- adjust mode ----
 
   EchoClockCard.prototype._maxRemove = function () {
-    var it = this._adj ? this._item(this._adj.slot) : null;
+    var it = this._adj ? this._item(this._adj.id) : null;
     return Math.max(0, Math.floor((this._left(it) - 10) / 60));
   };
 
@@ -2188,9 +2157,15 @@
     }
   };
 
+  EchoClockCard.prototype._tileOf = function (cls, id) {
+    var els = this._mainEl.querySelectorAll(cls);
+    for (var i = 0; i < els.length; i++) if (els[i].getAttribute("data-id") === id) return els[i];
+    return null;
+  };
+
   EchoClockCard.prototype._paintAdjust = function () {
     if (!this._adj) return;
-    var tile = this._mainEl.querySelector('.adj[data-slot="' + this._adj.slot + '"]');
+    var tile = this._tileOf(".adj", this._adj.id);
     if (!tile) return;
     var d = this._adj.delta;
     var idx = 0;
@@ -2214,17 +2189,17 @@
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
       var left = this._left(it);
-      if (this._adj && this._adj.slot === it.slot) {
-        var big = this._mainEl.querySelector('.adj[data-slot="' + it.slot + '"] .big');
+      if (this._adj && this._adj.id === it.id) {
+        var at = this._tileOf(".adj", it.id), big = at && at.querySelector(".big");
         if (big) {
           var nt = fmtClock(Math.max(10, left + this._adj.delta * 60));
           if (big.textContent !== nt) big.textContent = nt;
         }
         continue;
       }
-      var col = this._mainEl.querySelector('.tcol[data-slot="' + it.slot + '"]');
+      var col = this._tileOf(".tcol", it.id);
       if (!col) continue;
-      var total = it.duration > 0 ? it.duration : Math.max(left, 1);
+      var total = it.duration > 0 ? Math.max(it.duration, left) : Math.max(left, 1);
       var frac = it.state === "done" ? 1 : Math.max(0, Math.min(1, left / total));
       var clock = col.querySelector(".clock");
       var txt = it.state === "done" ? "0:00" : fmtClock(left);
@@ -2236,7 +2211,7 @@
       col.querySelector(".arc").setAttribute("stroke-dashoffset", (CIRC * (1 - frac)).toFixed(2));
       var sub = col.querySelector(".sub");
       var subHtml;
-      if (it.state === "active") subHtml = '<ha-icon icon="mdi:bell-outline"></ha-icon>' + fmtEnds(it.finishes);
+      if (it.state === "active") subHtml = '<ha-icon icon="mdi:bell-outline"></ha-icon>' + fmtEnds(Date.now() + left * 1000);
       else if (it.state === "paused") subHtml = "Paused";
       else subHtml = "Done";
       if (sub.getAttribute("data-h") !== subHtml) { sub.innerHTML = subHtml; sub.setAttribute("data-h", subHtml); }
@@ -2245,14 +2220,30 @@
 
   // ---------- timer actions ----------
 
-  EchoClockCard.prototype._action = function (act, slot, el) {
-    var hass = this._hass;
-    if (!hass) return;
-    var cfg = this._config;
-    var timer = slot ? cfg.slots[slot - 1].timer : null;
-    var scr = function (id) { return id.replace(/^script\./, ""); };
+  var VERB = { pause: "pause", resume: "resume", cancel: "cancel", add: "change", remove: "change" };
+
+  // A change through Kiosk Satellite (on the kiosk) or Home Assistant (elsewhere); says why when it fails.
+  EchoClockCard.prototype._ctl = function (id, action, secs) {
+    var T = timers(), self = this;
+    if (!T) return;
+    T.control(id, action, secs).then(null, function (e) {
+      if (T.clash(id)) {
+        var t = T.list().filter(function (x) { return x.id === id; })[0];
+        self._toast("Home Assistant can't tell this timer apart from " + (t && t.name ? "another named " + T.label(t) : "another unnamed " + fmtLen(t ? t.total : 0) + " one") +
+          ", so it can't change just one. Say \u201ccancel all timers\u201d or let one run out. Named timers avoid this.");
+      }
+      else self._toast("Couldn't " + VERB[action] + " the timer" + (e && e.message ? ": " + e.message : "."));
+      T.refresh();
+    });
+  };
+
+  EchoClockCard.prototype._action = function (act, id, el) {
+    var hass = this._hass, T = timers(), self = this;
+    if (!hass || !T) return;
+    var it = id ? this._item(id) : null;
     if (act === "preset") {
       var sec = parseInt(el.getAttribute("data-sec"), 10);
+      this._pname = el.getAttribute("data-name") || "";
       this._tw = { h: Math.floor(sec / 3600), m: Math.floor(sec / 60) % 60, s: sec % 60 };
       var tw = this._tw, w = this._twWheels || [];
       if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(tw.s, true); }
@@ -2262,17 +2253,25 @@
       if (!secs) return;
       if (this._pending.start && now - this._pending.start < 1500) return; // debounce double taps
       this._pending.start = now;
+      // The name typed, else the preset's, else the length ("10 min"); made unique on the kiosk.
+      var pre = this._pname && this._mainEl.querySelector(".chip.sel") ? this._pname : "";
+      var name = (this._tname || "").trim() || pre || fmtLen(secs);
       this._adding = false;
+      this._tname = "";
+      this._pname = "";
+      var ae = this.shadowRoot.activeElement;
+      if (ae && ae.blur) ae.blur();                                    // closes the keyboard
       recentsAdd(secs);
-      hass.callService("script", scr(cfg.start_script), { duration: secs, navigate: false, prefix: cfg.timer_prefix });
-    } else if (act === "pause") {
-      hass.callService("timer", "pause", { entity_id: timer });
-    } else if (act === "resume") {
-      hass.callService("timer", "start", { entity_id: timer });
-    } else if (act === "cancel") {
-      hass.callService("script", scr(cfg.cancel_script), { slot: slot, prefix: cfg.timer_prefix });
+      T.start(name, secs).then(null, function (e) { self._toast("Couldn't start the timer" + (e && e.message ? ": " + e.message : ".")); });
+      this._render();
+    } else if (act === "pause" || act === "resume" || act === "cancel") {
+      this._ctl(id, act);
+    } else if (act === "stop") {
+      T.stop().then(null, function (e) { self._toast("Couldn't stop the alert" + (e && e.message ? ": " + e.message : ".")); });
     } else if (act === "more") {
-      hass.callService("timer", "start", { entity_id: timer, duration: 60 });
+      // A finished timer can't take more time: silence it and start the same name again for a minute.
+      var nm = it && it.t.name ? it.t.name : "";
+      T.stop().then(function () { return T.start(nm || "1 min", 60); }).then(null, function (e) { self._toast("Couldn't add a minute" + (e && e.message ? ": " + e.message : ".")); });
     } else if (act === "add-open") {
       this._adding = true;
       this._render();
@@ -2280,21 +2279,15 @@
       this._adding = false;
       this._render();
     } else if (act === "adjust") {
-      this._adj = { slot: slot, delta: 0 };
+      this._adj = { id: id, delta: 0 };
       this._render();
     } else if (act === "adj-cancel") {
       this._adj = null;
       this._render();
     } else if (act === "adj-apply") {
-      var it = this._item(slot), d = this._adj ? this._adj.delta : 0;
+      var d = this._adj ? this._adj.delta : 0;
       this._adj = null;
-      if (it && d) {
-        var s2 = Math.max(10, Math.round(this._left(it) + d * 60));
-        var p = hass.callService("timer", "start", { entity_id: timer, duration: s2 });
-        if (it.state === "paused" && p && p.then) {
-          p.then(function () { hass.callService("timer", "pause", { entity_id: timer }); });
-        }
-      }
+      if (it && d) this._ctl(id, d > 0 ? "add" : "remove", Math.abs(d) * 60);
       this._render();
     }
   };

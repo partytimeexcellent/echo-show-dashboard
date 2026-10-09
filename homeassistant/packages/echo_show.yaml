@@ -1,4 +1,4 @@
-# Echo Show Dashboard: helpers and scripts
+# Echo Show Dashboard: helpers
 # https://github.com/partytimeexcellent/echo-show-dashboard
 #
 # Install:
@@ -8,50 +8,16 @@
 #   2. Copy this file to <config>/packages/echo_show.yaml
 #   3. Restart Home Assistant.
 #
-# The timers here are the SHARED set, "echo_timer" (timer.echo_timer_1..3), used by any
-# display without a set of its own. A display uses its own timer.<display>_timer_1..3 and
-# input_text.<display>_timer_N_name when they exist (<display> = its Kiosk Satellite name
-# slugified): tap "Set up timers for this display" in the settings panel's Timers tab, or
-# create them under Settings > Helpers with exactly those names.
+# Timers are Kiosk Satellite's own (2026.10.14 or later, Voice Satellite running natively):
+# the dashboard reads and changes each display's timers through its esphome.<node>_vs_*
+# actions and needs no timer helpers. The alarm volume below is what the "Timer finished"
+# blueprint (blueprints/automation/echo_show/timer_finished.yaml) turns a display up to
+# while a timer rings; the settings panel's Timers tab sets it.
 #
 # The media card's shared queue helpers (input_text.echo_media_src_<room>) are only
 # needed if you use the media card WITHOUT a direct Music Assistant connection. Add one
 # per room, named after the room's `name:` in the card (e.g. "Living Room" ->
 # echo_media_src_living_room).
-
-timer:
-  echo_timer_1:
-    name: Echo Timer 1
-    icon: mdi:timer-outline
-    restore: true
-  echo_timer_2:
-    name: Echo Timer 2
-    icon: mdi:timer-outline
-    restore: true
-  echo_timer_3:
-    name: Echo Timer 3
-    icon: mdi:timer-outline
-    restore: true
-
-input_text:
-  # Label of each running timer (empty = slot free). "Done" = timer idle but name set.
-  echo_timer_1_name:
-    name: Echo Timer 1 Name
-    icon: mdi:label-outline
-    max: 40
-  echo_timer_2_name:
-    name: Echo Timer 2 Name
-    icon: mdi:label-outline
-    max: 40
-  echo_timer_3_name:
-    name: Echo Timer 3 Name
-    icon: mdi:label-outline
-    max: 40
-  # Media card "playing from" memory, one per room (optional, see above).
-  # echo_media_src_kitchen:
-  #   name: Echo Media Src Kitchen
-  #   icon: mdi:playlist-music
-  #   max: 255
 
 input_number:
   echo_timer_alarm_volume:
@@ -63,139 +29,9 @@ input_number:
     unit_of_measurement: "%"
     mode: slider
 
-input_select:
-  echo_timer_alarm_tone:
-    name: Echo Timer Alarm Tone
-    icon: mdi:music-note-outline
-    options:
-      - Chime
-      - Marimba
-      - Bells
-      - Gentle beep
-      - Kitchen bell
-      - Classic alarm
-
-script:
-  echo_timer_start:
-    alias: "Echo timer: start"
-    description: >-
-      Starts the first free timer of a timer set, names it, and optionally switches a
-      Kiosk Satellite display to its timers view. Returns ok / slot / label.
-    icon: mdi:timer-play-outline
-    mode: queued
-    max: 5
-    fields:
-      duration:
-        name: Duration (seconds)
-        required: true
-        selector:
-          number:
-            min: 1
-            max: 86400
-            mode: box
-            unit_of_measurement: s
-      name:
-        name: Name
-        required: false
-        selector:
-          text: {}
-      prefix:
-        name: Timer set
-        description: timer.<prefix>_1..3
-        default: echo_timer
-        selector:
-          text: {}
-      navigate:
-        name: Show the timers view
-        default: true
-        selector:
-          boolean: {}
-      view_select:
-        name: Display's dashboard-view select
-        description: The Kiosk Satellite "Dashboard view" select of the display to switch.
-        required: false
-        selector:
-          entity:
-            domain: select
-      view:
-        name: Timers view path
-        default: echo-show/timers
-        selector:
-          text: {}
-    sequence:
-      - variables:
-          label: "{{ (name | default('', true) | string | trim) or 'Timer' }}"
-          pfx: "{{ prefix | default('echo_timer', true) }}"
-          secs: "{{ duration | int(0) }}"
-      - variables:
-          slot: >-
-            {% set ns = namespace(s=0) %}{% for i in [1, 2, 3] %}{% if ns.s == 0 and is_state('timer.' ~ pfx ~ '_' ~ i, 'idle') and states('input_text.' ~ pfx ~ '_' ~ i ~ '_name') in ['', 'unknown', 'unavailable'] %}{% set ns.s = i %}{% endif %}{% endfor %}{{ ns.s }}
-      - if:
-          - condition: template
-            value_template: "{{ slot | int == 0 or secs | int <= 0 }}"
-        then:
-          - variables:
-              result:
-                ok: false
-                reason: "{{ 'full' if slot | int == 0 else 'duration' }}"
-          - stop: No free timer slot or bad duration
-            response_variable: result
-      - action: input_text.set_value
-        target:
-          entity_id: "input_text.{{ pfx }}_{{ slot }}_name"
-        data:
-          value: "{{ label[:40] }}"
-      - action: timer.start
-        target:
-          entity_id: "timer.{{ pfx }}_{{ slot }}"
-        data:
-          duration: "{{ secs | int }}"
-      - if:
-          - condition: template
-            value_template: "{{ (navigate | default(true)) and (view_select | default('', true)) != '' }}"
-        then:
-          - action: select.select_option
-            continue_on_error: true
-            target:
-              entity_id: "{{ view_select }}"
-            data:
-              option: "{{ view | default('echo-show/timers', true) }}"
-      - variables:
-          result:
-            ok: true
-            slot: "{{ slot | int }}"
-            label: "{{ label }}"
-            seconds: "{{ secs | int }}"
-      - stop: Started
-        response_variable: result
-
-  echo_timer_cancel:
-    alias: "Echo timer: cancel / dismiss"
-    description: Cancels (or dismisses a finished) timer slot and clears its name.
-    icon: mdi:timer-cancel-outline
-    mode: parallel
-    fields:
-      slot:
-        name: Slot
-        required: true
-        selector:
-          number:
-            min: 1
-            max: 3
-            mode: box
-      prefix:
-        name: Timer set
-        default: echo_timer
-        selector:
-          text: {}
-    sequence:
-      - variables:
-          pfx: "{{ prefix | default('echo_timer', true) }}"
-      - action: timer.cancel
-        target:
-          entity_id: "timer.{{ pfx }}_{{ slot | int }}"
-      - action: input_text.set_value
-        target:
-          entity_id: "input_text.{{ pfx }}_{{ slot | int }}_name"
-        data:
-          value: ""
+# input_text:
+#   # Media card "playing from" memory, one per room (optional, see above).
+#   echo_media_src_kitchen:
+#     name: Echo Media Src Kitchen
+#     icon: mdi:playlist-music
+#     max: 255

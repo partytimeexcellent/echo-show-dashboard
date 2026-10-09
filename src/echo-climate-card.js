@@ -16,7 +16,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.2";
+  var VERSION = "1.0.3";
 
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
@@ -36,8 +36,6 @@
     if (window.EchoShow && window.EchoShow.displayName) return window.EchoShow.displayName();
     return Promise.resolve("");
   }
-  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
-  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -360,10 +358,10 @@
     if (!config || !config.entity) throw new Error("echo-climate-card: set entity (your climate.* thermostat)");
     this._raw = config;
     this._apply(null);
-    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+    if (!this._devL) {   // this display's device (area, timers) becomes known after the first render
       this._devL = true;
       var me = this;
-      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._sig = ""; me.hass = me._hass; } });
     }
     var self = this;
     echoDisplayName().then(function (name) {
@@ -386,7 +384,6 @@
       set_script: c.set_script || "echo_climate_set",
       house_script: c.house_script || "echo_house_set",
       outdoor: c.outdoor || null,
-      timer_prefix: c.timer_prefix || null,
       buttons: c.buttons || [],
       idle_timeout: c.idle_timeout !== undefined ? c.idle_timeout : 0,
       idle_path: c.idle_path || null,
@@ -414,8 +411,7 @@
   EchoClimateCard.prototype.disconnectedCallback = function () {
     this._stopIdle();
     this._closeSheet();
-    this._runSeen = null; this._doneSeen = null;
-    if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    if (window.EchoShow && window.EchoShow.timerBadgesDetach) window.EchoShow.timerBadgesDetach(this);
     if (this._settingsEl) this._settingsEl.close();
   };
 
@@ -556,7 +552,7 @@
   EchoClimateCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
     if (btn.action === "settings" || btn.action === "timer-settings") {
-      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, {});
     } else if (btn.navigation_path) navigate(btn.navigation_path);
     else if (btn.url) window.open(btn.url, "_self");
   };
@@ -1551,82 +1547,16 @@
   };
 
   // ---------- timers on the nav buttons + the countdown overlay (like the other pages) ----------
-  EchoClimateCard.prototype._timersFor = function (btn) {
-    if (!btn.timers) return null;
-    var pfx = this._config.timer_prefix || ownTimers(this._hass);
-    if (!pfx) return btn.timers;
-    var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
-    return out;
-  };
-  EchoClimateCard.prototype._overlayTimers = function () {
-    var b = this._config.buttons;
-    for (var i = 0; i < b.length; i++) if (b[i].timers) return this._timersFor(b[i]);
-    return [];
-  };
   EchoClimateCard.prototype._updateOverlay = function () {
     var el = this._ovEl;
     if (!el || !el.update) return;
-    var b = this._config.buttons;
+    var b = this._config.buttons || [];
     for (var i = 0; i < b.length; i++) if (b[i].timers) { el.path = b[i].navigation_path || null; break; }
-    el.update(this._hass, this._overlayTimers());
+    el.update(this._hass);
   };
-  function parseHms(s) {
-    var p = String(s || "").split(":");
-    return p.length === 3 ? parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]) : 0;
-  }
-  function fmtCountdown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
-  }
   EchoClimateCard.prototype._updateBadges = function () {
-    var buttons = this._config.buttons, st = this._hass.states, info = [], sig = "";
-    for (var i = 0; i < buttons.length; i++) {
-      if (!buttons[i].timers) continue;
-      var b = { i: i, done: false, finishes: 0, paused: 0, running: [] }, list = this._timersFor(buttons[i]);
-      for (var j = 0; j < list.length; j++) {
-        var t = st[list[j]];
-        if (!t) continue;
-        var nm = st["input_text." + list[j].split(".")[1] + "_name"];
-        var named = nm && nm.state && nm.state !== "unknown" && nm.state !== "unavailable";
-        if (t.state === "active" || t.state === "paused") b.running.push(list[j]);
-        if (t.state === "active" && t.attributes.finishes_at) {
-          var f = Date.parse(t.attributes.finishes_at);
-          if (!b.finishes || f < b.finishes) b.finishes = f;
-        } else if (t.state === "paused") {
-          var r = parseHms(t.attributes.remaining);
-          if (!b.paused || r < b.paused) b.paused = r;
-        } else if (t.state === "idle" && named) b.done = true;
-        sig += list[j] + t.last_updated + (nm ? nm.state : "") + "|";
-      }
-      info.push(b);
-    }
-    if (!info.length) return;
-    var armed = !!this._runSeen && this.isConnected;
-    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
-    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
-    for (var q = 0; this.isConnected && q < info.length; q++) {
-      var bt = buttons[info[q].i], prev = this._runSeen[info[q].i], started = false;
-      if (prev) info[q].running.forEach(function (id) { if (prev.indexOf(id) === -1) started = true; });
-      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) this._buttonTap(bt);
-      this._doneSeen[info[q].i] = info[q].done;
-      this._runSeen[info[q].i] = info[q].running;
-    }
-    if (sig !== this._badgeSig) { this._badgeSig = sig; this._badges = info; this._paintBadges(); }
-    var any = info.some(function (x) { return x.finishes; }), self = this;
-    if (any && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
-    if (!any && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
-  };
-  EchoClimateCard.prototype._paintBadges = function () {
-    var info = this._badges || [];
-    for (var i = 0; i < info.length; i++) {
-      var el = this.shadowRoot.querySelector('.bdg[data-i="' + info[i].i + '"]');
-      if (!el) continue;
-      var b = info[i], txt = b.done ? "Done" : b.finishes ? fmtCountdown((b.finishes - Date.now()) / 1000) : b.paused ? fmtCountdown(b.paused) : "";
-      if (el.textContent !== txt) el.textContent = txt;
-      if (b.done !== el.classList.contains("done")) el.classList.toggle("done");
-    }
+    var ES = window.EchoShow;
+    if (ES && ES.timerBadges) ES.timerBadges(this);
   };
 
   // ---------- back to the home view after a while ----------

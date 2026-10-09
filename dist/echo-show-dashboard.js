@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.15.1
+ * Echo Show Dashboard 1.16.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 1.9.0, echo-weather-card 1.7.3, echo-clock-card 2.3.0, echo-media-card 1.15.1, echo-climate-card 1.0.2, echo-notify 1.3.0
+ * echo-show-common 2.0.0, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -17,6 +17,8 @@
  *    Satellite app's Home Assistant entities and only show when they exist.
  *  - Timer overlay (<echo-timer-overlay>): a large countdown on the other pages while a
  *    timer is running.
+ *  - This display's timers (EchoShow.timers): Kiosk Satellite's own, from its JavaScript API on
+ *    the kiosk and from its ESPHome actions in Home Assistant elsewhere.
  *  - Per-display preferences (stored in this browser) that the cards read.
  *
  * Dashboard config (optional, top level of the raw dashboard config):
@@ -25,13 +27,14 @@
  *     devices:                          # per-display overrides, matched on the device name
  *       - match: office
  *         device: office_echo_show_8
+ *         node: office_echo_show_8      # its ESPHome node (esphome.<node>_vs_*); auto-detected
  *
  * Plain JavaScript, no dependencies, no build step. ES5-ish for older Chromium.
  */
 (function () {
   "use strict";
 
-  var VERSION = "1.9.0";
+  var VERSION = "2.0.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -242,24 +245,25 @@
     return (esCfg && esCfg.device) || null;
   }
 
-  // ---------- this display's own timer set: timer.<device>_timer_1..3 + input_text.<device>_timer_N_name ----------
+  // ---------- this display's Kiosk Satellite device (entity prefix), found once per page ----------
   var ownSlug;                          // undefined until asked, then the device slug (or null)
-  function timerSetOf(slug) { return slug ? slug + "_timer" : null; }
-  function hasTimerSet(hass, prefix) { return !!(prefix && hass && hass.states["timer." + prefix + "_1"]); }
-  // The display's own timer prefix when its helpers exist, else null (cards then use their configured timers).
+  var ownProf = null;                   // its echo_show.devices entry, if any
   // Synchronous for render code: the first call starts the lookup and the next hass update has the answer.
-  function ownTimerPrefix(hass) {
+  function ownDevice(hass) {
     if (!hass) return null;
     if (ownSlug === undefined) {
       ownSlug = null;
       Promise.all([echoDisplayName(), dashboardConfig(hass)]).then(function (r) {
-        ownSlug = resolveDevice(hass, r[0], (r[1] || {}).echo_show) || null;
+        var es = (r[1] || {}).echo_show;
+        ownProf = es ? matchDisplay(es.devices, r[0]) : null;
+        ownSlug = resolveDevice(hass, r[0], es) || null;
+        if (es && es.node && !(ownProf && ownProf.node)) ownProf = { node: es.node };
         // Cards re-render with their own timers and area once this is known.
         if (ownSlug) window.dispatchEvent(new CustomEvent("echo-show-device", { detail: { device: ownSlug } }));
+        tmEmit();
       }, function () { /* stays null */ });
     }
-    var p = timerSetOf(ownSlug);
-    return hasTimerSet(hass, p) ? p : null;
+    return ownSlug;
   }
   // The Home Assistant area of an entity (its own, else its device's).
   function areaOf(hass, id) {
@@ -269,7 +273,7 @@
   }
   // This display's area: the first of its Kiosk Satellite entities that has one.
   function ownArea(hass) {
-    ownTimerPrefix(hass);               // starts the device lookup
+    ownDevice(hass);                    // starts the device lookup
     if (!ownSlug || !hass || !hass.entities) return null;
     for (var id in hass.entities) {
       var o = id.slice(id.indexOf(".") + 1) + "_";
@@ -278,6 +282,281 @@
       if (a) return a;
     }
     return null;
+  }
+
+  // ---------- this display's timers: Kiosk Satellite's own (native Voice Satellite, 2026.10.14+) ----------
+  // One list per page, shared by the Clock card, the countdown overlay and the button badges.
+  //  - On the kiosk: window.kioskSatellite.getVoiceTimers() and the kiosksatellite:voice-timers event,
+  //    changed with controlVoiceTimer(). Listening only while something subscribes (cached views).
+  //  - Anywhere else (a desktop browser, the HA app): the display's VS Timers / VS Next timer sensors
+  //    say when to re-read esphome.<node>_vs_list_timers; changes go through the vs_* actions.
+  // Starting a timer always goes through esphome.<node>_vs_start_timer (there is no JS start).
+  // HA finds a timer by its name (or its starting length when unnamed), so every timer the
+  // dashboard starts gets a name no other timer on the kiosk has.
+  var TM = { list: [], sig: "", subs: [], hass: null, node: undefined, nodeFor: null, kioskOn: false, sensors: "", busy: false, again: false, poll: null, err: null };
+  function tmKiosk() { return !!(window.kioskSatellite && window.kioskSatellite.getVoiceTimers); }
+  function tmTokens(s) { return String(s || "").split("_").filter(function (x) { return x; }); }
+  // The ESPHome node of this display: its devices entry's node:, else the node of any vs_* action that
+  // matches the entity prefix best (same name, else the most shared words), so "ks_samsung_s20" goes with
+  // samsung_s20_kiosk. Every node with Voice Satellite actions is a candidate, also ones on an older Kiosk
+  // Satellite without the timer actions, so a display never borrows another display's timers.
+  function tmNode(hass) {
+    var slug = ownDevice(hass);
+    if (!slug || !hass || !hass.services) return null;
+    if (TM.nodeFor === slug && TM.node) return TM.node;      // a miss is looked up again (actions may load later)
+    var es = hass.services.esphome || {}, nodes = {}, k, m;
+    for (k in es) { m = /^(.+)_vs_(wake|cancel|show|start_timer|list_timers)$/.exec(k); if (m) nodes[m[1]] = true; }
+    var best = null, bestScore = 0, tie = false;
+    if (ownProf && ownProf.node) best = ownProf.node;
+    else if (nodes[slug]) best = slug;
+    else {
+      var st = tmTokens(slug);
+      for (k in nodes) {
+        var nt = tmTokens(k), shared = nt.filter(function (t) { return st.indexOf(t) !== -1; }).length;
+        var score = shared * 2 - (nt.length - shared);
+        // A word with a digit is a model or a number ("5", "s20"): one the display's name lacks rules the node out.
+        var clash = nt.some(function (t) { return /\d/.test(t) && st.indexOf(t) === -1; });
+        if (clash || shared < 1 || score <= 0) continue;
+        if (score > bestScore) { best = k; bestScore = score; tie = false; } else if (score === bestScore) tie = true;
+      }
+      if (tie) best = null;
+    }
+    TM.nodeFor = slug;
+    TM.node = best && es[best + "_vs_list_timers"] ? best : null;
+    TM.nodeSeen = best;   // matched, perhaps without the timer actions (Kiosk Satellite too old)
+    return TM.node;
+  }
+  function tmItem(t, at) {
+    var ends = t.ends_at ? Date.parse(t.ends_at) : 0;
+    return { id: String(t.timer_id || ""), name: String(t.name || ""), total: Math.round(+t.total_seconds || 0), left: +t.seconds_left || 0,
+      active: !!t.is_active && !t.finished, finished: !!t.finished, ends: isNaN(ends) ? 0 : ends, at: at };
+  }
+  function tmSet(timers) {
+    var at = Date.now(), list = (timers || []).map(function (t) { return tmItem(t, at); });
+    var sig = JSON.stringify(list.map(function (t) { return [t.id, t.name, t.total, t.active, t.finished, Math.round(t.ends / 1000), t.active ? 0 : Math.round(t.left)]; }));
+    TM.list = list;
+    if (sig === TM.sig) return;
+    TM.sig = sig;
+    tmEmit();
+  }
+  function tmEmit() { TM.subs.slice().forEach(function (cb) { try { cb(); } catch (e) { /* a card's problem */ } }); }
+  function tmOnKiosk(ev) { tmSet(ev && ev.detail ? ev.detail.timers : []); }
+  function tmKioskRead() {
+    var r;
+    try { r = window.kioskSatellite.getVoiceTimers(); } catch (e) { return; }
+    Promise.resolve(r).then(function (v) { if (v && TM.kioskOn) tmSet(v.timers); }, function () { /* keep the last list */ });
+  }
+  function tmSensors(hass, slug) {
+    return [devEnt(hass, slug, "sensor", "vs_timers"), devEnt(hass, slug, "sensor", "vs_next_timer")];
+  }
+  // Off the kiosk: read the list again (one request at a time, and once more if asked meanwhile).
+  function tmFetch() {
+    var hass = TM.hass, node = tmNode(hass);
+    if (!node || tmKiosk()) return;
+    if (TM.busy) { TM.again = true; return; }
+    TM.busy = true;
+    hass.callWS({ type: "call_service", domain: "esphome", service: node + "_vs_list_timers", service_data: {}, return_response: true }).then(function (r) {
+      TM.err = null;
+      tmSet(r && r.response ? r.response.timers : []);
+    }, function (e) { TM.err = (e && e.message) || "error"; }).then(function () {
+      TM.busy = false;
+      if (TM.again) { TM.again = false; tmFetch(); }
+    });
+  }
+  function tmPoll() {
+    // The sensors miss some changes (pausing a timer that isn't the soonest, dismissing an alert),
+    // so the list is also re-read every 15 s while it has timers and someone is looking.
+    var want = !tmKiosk() && TM.subs.length && TM.list.length;
+    if (want && !TM.poll) TM.poll = setInterval(function () { if (!document.hidden) tmFetch(); }, 15000);
+    if (!want && TM.poll) { clearInterval(TM.poll); TM.poll = null; }
+  }
+  // Called with every hass update (by the cards and the overlay).
+  function tmHass(hass) {
+    if (!hass) return;
+    TM.hass = hass;
+    if (tmKiosk()) return;
+    var slug = ownDevice(hass);
+    if (!slug || !tmNode(hass)) return;
+    var ids = tmSensors(hass, slug), sig = ids.map(function (id) { var s = id && hass.states[id]; return s ? s.state + "@" + s.last_updated : ""; }).join("|");
+    if (sig !== TM.sensors) { TM.sensors = sig; tmFetch(); }
+    tmPoll();
+  }
+  function tmSubscribe(cb) {
+    TM.subs.push(cb);
+    if (tmKiosk() && !TM.kioskOn) {
+      TM.kioskOn = true;
+      window.addEventListener("kiosksatellite:voice-timers", tmOnKiosk);
+      tmKioskRead();
+    } else if (TM.subs.length === 1 && TM.hass) { TM.sensors = ""; tmHass(TM.hass); }   // back on a cached view: re-read
+    return function () {
+      var i = TM.subs.indexOf(cb);
+      if (i !== -1) TM.subs.splice(i, 1);
+      if (!TM.subs.length && TM.kioskOn) { TM.kioskOn = false; window.removeEventListener("kiosksatellite:voice-timers", tmOnKiosk); }
+      tmPoll();
+    };
+  }
+  function tmLeft(t, now) {
+    if (!t) return 0;
+    if (t.finished) return 0;
+    if (t.active) return Math.max(0, t.ends ? (t.ends - (now || Date.now())) / 1000 : t.left - ((now || Date.now()) - t.at) / 1000);
+    return Math.max(0, t.left);
+  }
+  // 600 -> "10 min", 90 -> "1 min 30 sec"
+  function fmtLen(sec) {
+    var h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = Math.round(sec % 60), out = [];
+    if (h) out.push(h + " hr");
+    if (m) out.push(m + " min");
+    if (s) out.push(s + " sec");
+    return out.slice(0, 2).join(" ") || "0 sec";
+  }
+  function tmLabel(t) {
+    var n = String(t.name || "").trim();
+    return n ? n.charAt(0).toUpperCase() + n.slice(1) : fmtLen(t.total) + " timer";
+  }
+  // A name no other timer on the kiosk has (case doesn't count): "Pasta", "10 min", "10 min 2".
+  function tmUniqueName(base) {
+    base = String(base || "").trim().slice(0, 40) || "Timer";
+    var taken = {};
+    TM.list.forEach(function (t) { if (!t.finished) taken[String(t.name).toLowerCase()] = true; });   // HA drops finished ones
+    if (!taken[base.toLowerCase()]) return base;
+    for (var i = 2; i < 100; i++) if (!taken[(base + " " + i).toLowerCase()]) return base + " " + i;
+    return base + " " + Date.now() % 1000;
+  }
+  // Another timer that HA can't tell apart from this one (same name, or both unnamed with the same length).
+  function tmClash(id) {
+    var t = TM.list.filter(function (x) { return x.id === id; })[0];
+    if (!t) return false;
+    var n = t.name.toLowerCase();
+    return TM.list.some(function (x) { return x.id !== id && (n ? x.name.toLowerCase() === n : !x.name && x.total === t.total); });
+  }
+  function hms(sec) { sec = Math.max(0, Math.round(sec)); return { hours: Math.floor(sec / 3600), minutes: Math.floor(sec / 60) % 60, seconds: sec % 60 }; }
+  function tmCall(service, data) {
+    var hass = TM.hass, node = tmNode(hass);
+    if (!node) return Promise.reject(new Error("This display has no Kiosk Satellite timer actions in Home Assistant."));
+    return hass.callWS({ type: "call_service", domain: "esphome", service: node + "_" + service, service_data: data || {} }).then(function (r) {
+      setTimeout(tmFetch, 300);
+      return r;
+    });
+  }
+  var TM_SERVICE = { pause: "vs_pause_timer", resume: "vs_resume_timer", cancel: "vs_cancel_timer", add: "vs_add_time", remove: "vs_remove_time" };
+  // action: pause / resume / cancel / add / remove (add and remove take seconds). Rejects when it fails.
+  function tmControl(id, action, secs) {
+    if (tmKiosk() && window.kioskSatellite.controlVoiceTimer) {
+      var r;
+      try { r = window.kioskSatellite.controlVoiceTimer(id, action, secs ? hms(secs) : undefined); } catch (e) { return Promise.reject(e); }
+      return Promise.resolve(r).then(function (ok) {
+        if (ok === false) throw new Error("Kiosk Satellite couldn't change the timer.");
+        tmKioskRead();
+        return true;
+      });
+    }
+    var data = { timer_id: id };
+    if (action === "add" || action === "remove") { var d = hms(secs); data.hours = d.hours; data.minutes = d.minutes; data.seconds = d.seconds; }
+    return tmCall(TM_SERVICE[action], data);
+  }
+  function tmStart(name, secs) {
+    var d = hms(secs);
+    return tmCall("vs_start_timer", { name: tmUniqueName(name), hours: d.hours, minutes: d.minutes, seconds: d.seconds }).then(function (r) {
+      if (tmKiosk()) tmKioskRead();
+      return r;
+    });
+  }
+  // Silences ringing timers. vs_cancel also ends a voice turn, so while the assistant is listening or
+  // answering on this display it waits (up to 20 s) for it to finish.
+  function tmStop() {
+    var hass = TM.hass, slug = ownDevice(hass), vs = slug ? devEnt(hass, slug, "sensor", "voice_satellite") : null;
+    var t0 = Date.now();
+    return new Promise(function (res) {
+      (function go() {
+        var s = vs && TM.hass.states[vs] ? TM.hass.states[vs].state : "idle";
+        if (/listening|processing|responding/.test(s) && Date.now() - t0 < 20000) { setTimeout(go, 500); return; }
+        res(tmCall("vs_cancel", {}));
+      })();
+    });
+  }
+  // Is this display set up for Kiosk Satellite timers? "ok", "old" (Kiosk Satellite without the timer
+  // actions), "none" (no Voice Satellite actions found) or "unknown" (display not found yet).
+  function tmStatus(hass) {
+    if (tmKiosk() && tmNode(hass)) return "ok";
+    var slug = ownDevice(hass);
+    if (!slug) return tmKiosk() ? "ok" : "unknown";
+    if (tmNode(hass)) return "ok";
+    return TM.nodeSeen ? "old" : "none";
+  }
+
+  var Timers = {
+    hass: tmHass,
+    subscribe: tmSubscribe,
+    list: function () { return TM.list.slice(); },
+    left: tmLeft,
+    label: tmLabel,
+    fmtLen: fmtLen,
+    control: tmControl,
+    start: tmStart,
+    stop: tmStop,
+    clash: tmClash,
+    uniqueName: tmUniqueName,
+    node: function (hass) { return tmNode(hass || TM.hass); },
+    status: function (hass) { return tmStatus(hass || TM.hass); },
+    refresh: function () { if (tmKiosk()) tmKioskRead(); else tmFetch(); },
+  };
+
+  // ---------- timer badges on the bottom buttons (weather, media, climate pages) ----------
+  // A button with `timers: true` shows the soonest countdown, or "Done" while one rings.
+  // open_on_done / open_on_start: jump to the button's page when a timer finishes or a new one
+  // starts (by voice, say). Only changes seen while the page shows count: the first update after
+  // the page opens just takes a snapshot (a timer started on another page isn't "new").
+  function fmtCountdown(sec) {
+    sec = Math.max(0, Math.ceil(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
+  }
+  function badgeButtons(card) {
+    var b = (card._config && card._config.buttons) || [], out = [];
+    for (var i = 0; i < b.length; i++) if (b[i].timers) out.push(i);
+    return out;
+  }
+  function badgePaint(card) {
+    if (!card.shadowRoot) return;
+    // The soonest running timer, else the shortest paused one.
+    var list = TM.list, done = list.some(function (t) { return t.finished; }), now = Date.now();
+    var run = list.filter(function (t) { return t.active; }), paused = list.filter(function (t) { return !t.active && !t.finished; });
+    var pick = run.length ? run : paused;
+    var soon = pick.length ? Math.min.apply(null, pick.map(function (t) { return tmLeft(t, now); })) : null;
+    var txt = done ? "Done" : soon !== null ? fmtCountdown(soon) : "";
+    badgeButtons(card).forEach(function (i) {
+      var el = card.shadowRoot.querySelector('.bdg[data-i="' + i + '"]');
+      if (!el) return;
+      if (el.textContent !== txt) el.textContent = txt;
+      if (done !== el.classList.contains("done")) el.classList.toggle("done");
+    });
+  }
+  function badgeUpdate(card) {
+    if (!card._config || !badgeButtons(card).length) return;
+    if (card._hass) tmHass(card._hass);
+    if (card.isConnected && !card._tmUnsub) card._tmUnsub = tmSubscribe(function () { badgeUpdate(card); });
+    var ids = TM.list.filter(function (t) { return !t.finished; }).map(function (t) { return t.id; });
+    var done = TM.list.some(function (t) { return t.finished; });
+    var armed = !!card._tmSeen && card.isConnected;
+    if (!card.isConnected) card._tmSeen = null;
+    else {
+      if (armed) {
+        var started = ids.some(function (id) { return card._tmSeen.run.indexOf(id) === -1; });
+        var bt = (card._config.buttons || [])[badgeButtons(card)[0]];
+        if (bt && bt.navigation_path && ((done && !card._tmSeen.done && bt.open_on_done) || (started && bt.open_on_start))) card._buttonTap(bt);
+      }
+      card._tmSeen = { run: ids, done: done };
+    }
+    badgePaint(card);
+    var tick = TM.list.some(function (t) { return t.active; });
+    if (tick && !card._badgeTick) card._badgeTick = setInterval(function () { badgePaint(card); }, 1000);
+    if (!tick && card._badgeTick) { clearInterval(card._badgeTick); card._badgeTick = null; }
+  }
+  // From the card's disconnectedCallback.
+  function badgeDetach(card) {
+    if (card._tmUnsub) { card._tmUnsub(); card._tmUnsub = null; }
+    if (card._badgeTick) { clearInterval(card._badgeTick); card._badgeTick = null; }
+    card._tmSeen = null;
   }
 
   // ---------- settings panel ----------
@@ -747,42 +1026,24 @@
   };
 
   EchoShowSettings.prototype._tab_timers = function () {
-    var h = "", p = timerSetOf(this._device), ts = this._tset || {};
-    if (this._device && !hasTimerSet(this._hass, p)) {
-      h += '<div class="sec">This display\'s timers</div>' +
-        '<div class="note warn">This display is using the shared timers, so its timers also show on other displays that have no set of their own.</div>' +
-        '<div class="btns"><div class="bt go' + (ts.busy ? " busy" : "") + '" role="button" data-a="tset"><ha-icon icon="mdi:timer-plus-outline"></ha-icon>' +
-        (ts.busy ? "Setting up…" : "Set up timers for this display") + "</div></div>" +
-        (ts.err ? '<div class="note warn">' + esc(ts.err) + "</div>" : "");
-    } else if (ts.done) {
-      h += '<div class="note">This display now has its own timers (timer.' + esc(p) + "_1 to _3).</div>";
+    var h = '<div class="sec">This display\'s timers</div>', stt = Timers.status(this._hass), node = Timers.node(this._hass);
+    if (stt === "ok") {
+      h += '<div class="note">Timers live in Kiosk Satellite on this display' + (node ? " (ESPHome node <b>" + esc(node) + "</b>)" : "") +
+        ": the ones you ask for by voice and the ones started on the Clock page are the same list.</div>";
+    } else if (stt === "old") {
+      h += '<div class="note warn">Update Kiosk Satellite on this display to 2026.10.14 or later to see and start its timers here.</div>';
+    } else if (stt === "none") {
+      h += '<div class="note warn">Home Assistant has no Kiosk Satellite timer actions for this display' + (this._name ? ' ("' + esc(this._name) + '")' : "") +
+        ". In Kiosk Satellite, run Voice Satellite natively and turn on Settings › ESPHome › Expose kiosk entities (2026.10.14 or later). " +
+        "If its ESPHome node name differs a lot from its name, add <b>node: &lt;node name&gt;</b> to its entry under echo_show: devices: in the dashboard's raw config.</div>";
+    } else {
+      h += this._noDevice();
     }
-    return h + '<div class="sec">Alarm</div><div class="alarm"></div>' +
-      '<div class="note">Volume and tone are shared by every display and by the "alarm when finished" automation.</div>';
-  };
-  // Creates timer.<device>_timer_1..3 and input_text.<device>_timer_1..3_name. Home Assistant only lets an
-  // administrator create helpers, so a display signed in as another user gets told what to create instead.
-  EchoShowSettings.prototype._timerSetup = function () {
-    var self = this, h = this._hass, slug = this._device, p = timerSetOf(slug);
-    if (!slug || (this._tset && this._tset.busy)) return;
-    var label = slugify(this._name) === slug ? String(this._name) : slug.replace(/_/g, " ").replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
-    this._tset = { busy: true };
-    this._refresh(false);
-    var steps = [];
-    [1, 2, 3].forEach(function (i) {
-      if (!h.states["timer." + p + "_" + i]) steps.push({ type: "timer/create", name: label + " Timer " + i, icon: "mdi:timer-outline", duration: "00:05:00", restore: true });
-      if (!h.states["input_text." + p + "_" + i + "_name"]) steps.push({ type: "input_text/create", name: label + " Timer " + i + " Name", icon: "mdi:label-outline", min: 0, max: 40, mode: "text" });
-    });
-    steps.reduce(function (pr, msg) { return pr.then(function () { return h.callWS(msg); }); }, Promise.resolve()).then(function () {
-      self._tset = { done: true };
-      if (self._tab === "timers") self._refresh(true);
-    }, function (e) {
-      var m = (e && (e.message || e.code)) || "";
-      self._tset = { err: /unauthor|admin|permission/i.test(m) || (e && e.code === "unauthorized")
-        ? "Only a Home Assistant administrator can create timers. Sign this display in as an admin once and tap the button again, or create timer." + p + "_1 to _3 and input_text." + p + "_1_name to _3_name under Settings › Devices & services › Helpers."
-        : "Couldn't create the timers: " + (m || "no answer from Home Assistant.") };
-      if (self._tab === "timers") self._refresh(false);
-    });
+    var mt = this._device ? this._dev("switch", "vs_mute_timers") : null;
+    if (mt) h += this._switchRow("Mute timer alerts", "A finished timer shows its alert without the sound", this._isOn(mt), "toggle", ' data-id="' + esc(mt) + '"');
+    return h + '<div class="sec">Alarm volume</div><div class="alarm"></div>' +
+      '<div class="note">While a timer rings, the "Timer finished" automation (blueprint timer_finished.yaml) turns this display\'s assistant volume up to this level and puts it back when the alert stops. ' +
+      "The sound is the timer chime under Voice Satellite › Chimes in Kiosk Satellite.</div>";
   };
   EchoShowSettings.prototype._mountAlarm = function () {
     var host = this._bodyEl.querySelector(".alarm");
@@ -797,10 +1058,9 @@
     }
     var es = (this._es && this._es.timers) || {};
     for (k in es) cfg[k] = es[k];
-    // "Test" plays at the alarm volume on this display's own speaker.
-    var dv = this._device ? this._dev("number", "volume") : null;
-    if (dv) cfg.device_volume_entity = dv;
-    if (this._ctx.timers) cfg.timers = this._ctx.timers;
+    // Kiosk Satellite rings with its own chime: only the volume is set here.
+    cfg.tones = false;
+    cfg.test = false;
     el.embedded = true;
     el.config = cfg;
     host.appendChild(el);
@@ -1074,8 +1334,6 @@
       h.callService("number", "set_value", { entity_id: id, value: parseFloat(v) });
     } else if (a === "press" && id) {
       h.callService("button", "press", { entity_id: id });
-    } else if (a === "tset") {
-      this._timerSetup();
     } else if (a === "reload") {
       var rl = this._device ? this._dev("button", "reload_page") : null;
       if (rl) h.callService("button", "press", { entity_id: rl }); else window.location.reload();
@@ -1154,7 +1412,7 @@
   if (!customElements.get("echo-show-settings")) customElements.define("echo-show-settings", EchoShowSettings);
 
   var current = null;
-  // Open the settings panel from a card. ctx: { tab, timers: [timer ids] }.
+  // Open the settings panel from a card. ctx: { tab, alarm: {clock card settings} }.
   function openSettings(card, ctx) {
     if (current) return current;
     var el = document.createElement("echo-show-settings");
@@ -1197,14 +1455,6 @@
     var ss = (s < 10 ? "0" : "") + s;
     return h > 0 ? h + ":" + (m < 10 ? "0" : "") + m + ":" + ss : m + ":" + ss;
   }
-  function parseDur(s) {
-    if (s === undefined || s === null) return 0;
-    var days = 0, m = String(s).match(/^(\d+) days?, (.*)$/);
-    if (m) { days = parseInt(m[1], 10); s = m[2]; }
-    var p = String(s).split(":");
-    if (p.length !== 3) return 0;
-    return days * 86400 + parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
-  }
 
   function EchoTimerOverlay() {
     var self = Reflect.construct(HTMLElement, [], EchoTimerOverlay);
@@ -1225,10 +1475,13 @@
       this._onPrefs = function () { self._place(); self._paint(); };
     }
     window.addEventListener("echo-show-prefs", this._onPrefs);
+    if (!this._unsub) this._unsub = Timers.subscribe(function () { self._fromList(); });
     this._place();
+    this._fromList();
   };
   EchoTimerOverlay.prototype.disconnectedCallback = function () {
     window.removeEventListener("echo-show-prefs", this._onPrefs);
+    if (this._unsub) { this._unsub(); this._unsub = null; }
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
   };
   // "auto" lets each page pick a spot that doesn't cover its controls (attribute auto-pos).
@@ -1238,23 +1491,19 @@
     ["top-right", "top-left", "bottom-right", "bottom-left", "media"].forEach(function (c) { this.classList.toggle(c, c === pos); }, this);
   };
 
-  // timers: [timer ids]; each may have input_text.<id>_name with its label.
-  EchoTimerOverlay.prototype.update = function (hass, timers) {
+  // The page's card passes every hass update; the list itself comes from this display's Kiosk Satellite.
+  EchoTimerOverlay.prototype.update = function (hass) {
     if (hass && !lastHass) { lastHass = hass; activeTheme = null; applyTheme(); }
     lastHass = hass || lastHass;
-    var st = hass.states, items = [];
-    (timers || []).forEach(function (id) {
-      var t = st[id];
-      if (!t) return;
-      var nmE = st["input_text." + id.split(".")[1] + "_name"];
-      var nm = nmE && nmE.state && nmE.state !== "unknown" && nmE.state !== "unavailable" ? nmE.state : "";
-      var dur = parseDur(t.attributes.duration);
-      if (t.state === "active" && t.attributes.finishes_at) items.push({ s: "active", n: nm || "Timer", end: Date.parse(t.attributes.finishes_at), dur: dur });
-      else if (t.state === "paused") items.push({ s: "paused", n: nm || "Timer", rem: parseDur(t.attributes.remaining), dur: dur });
-      else if (t.state === "idle" && nm) items.push({ s: "done", n: nm, dur: dur });
+    Timers.hass(hass);
+    this._fromList();
+  };
+  EchoTimerOverlay.prototype._fromList = function () {
+    var items = Timers.list().map(function (t) {
+      return { s: t.finished ? "done" : t.active ? "active" : "paused", n: tmLabel(t), t: t, dur: t.total };
     });
-    var order = { done: 0, active: 1, paused: 2 };
-    items.sort(function (a, b) { return (order[a.s] - order[b.s]) || ((a.end || 0) - (b.end || 0)); });
+    var order = { done: 0, active: 1, paused: 2 }, now = Date.now();
+    items.sort(function (a, b) { return (order[a.s] - order[b.s]) || (tmLeft(a.t, now) - tmLeft(b.t, now)); });
     this._items = items;
     this._paint();
     var self = this, live = items.some(function (i) { return i.s === "active"; });
@@ -1270,7 +1519,7 @@
     var h = "", now = Date.now();
     var R = 40, C = 2 * Math.PI * R;
     this._items.forEach(function (it) {
-      var rem = it.s === "active" ? (it.end - now) / 1000 : it.s === "paused" ? it.rem : 0;
+      var rem = tmLeft(it.t, now);
       var f = it.dur > 0 ? clamp(rem / it.dur, 0, 1) : 0;
       var col = it.s === "done" ? "#ff6b61" : it.s === "paused" ? "rgba(255,255,255,.45)" : "var(--es-hi,#ffb340)";
       h += '<div class="t ' + it.s + '"><svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="' + R + '" stroke="rgba(255,255,255,.14)"/>' +
@@ -1382,7 +1631,9 @@
     settingsOpen: function () { return !!current; },
     displayName: echoDisplayName,
     devEnt: devEnt,
-    ownTimerPrefix: ownTimerPrefix,
+    timers: Timers,
+    timerBadges: badgeUpdate,
+    timerBadgesDetach: badgeDetach,
     ownArea: ownArea,
     areaOf: areaOf,
     // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.
@@ -1411,42 +1662,8 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.3";
+  var VERSION = "1.7.4";
 
-
-  // ---------- which display is this? ----------
-  // One dashboard serves several Echo Shows. Each card can carry per-display overrides
-  // (devices: [{match: "office", ...}]) chosen by the Kiosk Satellite device name.
-  // "?echo_display=<name>" in the URL (remembered in this browser) overrides it.
-
-  function echoDisplayName() {
-    if (window.__echoDisplayP) return window.__echoDisplayP;
-    var forced = null;
-    try {
-      var m = /[?&]echo_display=([^&]+)/.exec(window.location.search);
-      if (m) window.localStorage.setItem("echo-display", decodeURIComponent(m[1]));
-      forced = window.localStorage.getItem("echo-display");
-    } catch (e) { /* storage unavailable */ }
-    if (forced) window.__echoDisplayP = Promise.resolve(forced);
-    else if (window.kioskSatellite && window.kioskSatellite.getDeviceInfo) {
-      window.__echoDisplayP = window.kioskSatellite.getDeviceInfo().then(function (d) {
-        return d ? String(d.name || d.model || "") : "";
-      }, function () { return ""; });
-    } else window.__echoDisplayP = Promise.resolve("");
-    return window.__echoDisplayP;
-  }
-
-  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
-  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
-  function matchDisplay(devices, name) {
-    if (!devices || !name) return null;
-    var n = String(name).toLowerCase();
-    for (var i = 0; i < devices.length; i++) {
-      var mt = devices[i].match;
-      if (mt && n.indexOf(String(mt).toLowerCase()) !== -1) return devices[i];
-    }
-    return null;
-  }
 
   // ---------- small helpers ----------
 
@@ -1831,30 +2048,11 @@
     if (!hasWeather) throw new Error("echo-weather-card: at least one source must be a weather.* entity");
     this._config = config;
     this._sourceIndex = this._loadSource();
-    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+    if (!this._devL) {   // this display's device (area, timers) becomes known after the first render
       this._devL = true;
       var me = this;
-      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._sig = ""; me.hass = me._hass; } });
     }
-    var self = this;
-    echoDisplayName().then(function (name) {
-      var prof = matchDisplay(config.devices, name);
-      self._timerPrefix = prof && prof.timer_prefix ? prof.timer_prefix : null;
-      self._badgeSig = "";
-      self._runSeen = null;
-      self._doneSeen = null;
-      if (self._built && self._hass) self._updateBadges();
-    });
-  };
-
-  // Timers a button tracks (per-display prefix overrides the configured list).
-  EchoWeatherCard.prototype._timersFor = function (btn) {
-    if (!btn.timers) return null;
-    var pfx = this._timerPrefix || ownTimers(this._hass);
-    if (!pfx) return btn.timers;
-    var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
-    return out;
   };
 
   EchoWeatherCard.prototype.getCardSize = function () {
@@ -1930,11 +2128,10 @@
 
   EchoWeatherCard.prototype.disconnectedCallback = function () {
     if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
-    this._runSeen = null; this._doneSeen = null;
     this._unsubscribe();
     this._unwatchConnection();
     if (this._subRetry) { clearTimeout(this._subRetry); this._subRetry = null; }
-    if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    if (window.EchoShow && window.EchoShow.timerBadgesDetach) window.EchoShow.timerBadgesDetach(this);
     if (this._settingsEl) this._settingsEl.close();
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
   };
@@ -2021,7 +2218,7 @@
     if (!btn) return;
     if (btn.action === "settings" || btn.action === "timer-settings") {
       // Shared settings panel (echo-show-common); the old timer-only popup otherwise.
-      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, {});
       else if (window.EchoAlarmSettingsOpen) window.EchoAlarmSettingsOpen(this, this._rootEl, btn.settings);
     } else if (btn.navigation_path) {
       window.history.pushState(null, "", btn.navigation_path);
@@ -2033,111 +2230,20 @@
   };
 
   // ---------- timer countdown badges on nav buttons ----------
-  // A button with `timers: [timer.x, ...]` shows the soonest countdown next to its icon.
-  // A timer counts as "done" when it is idle but its companion input_text.<id>_name is set.
-
-  function parseHms(s) {
-    var p = String(s || "").split(":");
-    if (p.length !== 3) return 0;
-    return parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
-  }
-
-  function fmtCountdown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
-  }
+  // A button with `timers: true` shows this display's soonest timer (echo-show-common's EchoShow.timers).
 
   EchoWeatherCard.prototype._updateBadges = function () {
-    var buttons = this._config.buttons || [];
-    var st = this._hass.states;
-    var info = [];
-    var sig = "";
-    for (var i = 0; i < buttons.length; i++) {
-      if (!buttons[i].timers) continue;
-      var b = { i: i, done: false, finishes: 0, paused: 0, running: [] };
-      var list = this._timersFor(buttons[i]);
-      for (var j = 0; j < list.length; j++) {
-        var t = st[list[j]];
-        if (!t) continue;
-        var nm = st["input_text." + list[j].split(".")[1] + "_name"];
-        var named = nm && nm.state && nm.state !== "unknown" && nm.state !== "unavailable";
-        if (t.state === "active" || t.state === "paused") b.running.push(list[j] + "@" + (t.attributes.duration || ""));
-        if (t.state === "active" && t.attributes.finishes_at) {
-          var f = Date.parse(t.attributes.finishes_at);
-          if (!b.finishes || f < b.finishes) b.finishes = f;
-        } else if (t.state === "paused") {
-          var r = parseHms(t.attributes.remaining);
-          if (!b.paused || r < b.paused) b.paused = r;
-        } else if (t.state === "idle" && named) {
-          b.done = true;
-        }
-        sig += list[j] + t.last_updated + (nm ? nm.state : "") + "|";
-      }
-      info.push(b);
-    }
-    if (!info.length) return;
-    // open_on_done / open_on_start: jump to the button's page when one of its timers
-    // finishes, or when a new timer starts (e.g. by voice).
-    // Only react to changes seen while this page is showing: the first update after the
-    // page opens just takes a snapshot (a timer started on another page isn't "new").
-    var armed = !!this._runSeen && this.isConnected;
-    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
-    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
-    for (var q = 0; this.isConnected && q < info.length; q++) {
-      var bt = buttons[info[q].i];
-      var prevRun = this._runSeen[info[q].i];
-      var started = false;
-      if (prevRun) {
-        for (var r2 = 0; r2 < info[q].running.length; r2++) {
-          var id = info[q].running[r2].split("@")[0];
-          var was = false;
-          for (var r3 = 0; r3 < prevRun.length; r3++) if (prevRun[r3].split("@")[0] === id) was = true;
-          if (!was) started = true;
-        }
-      }
-      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) {
-        this._buttonTap(bt);
-      }
-      this._doneSeen[info[q].i] = info[q].done;
-      this._runSeen[info[q].i] = info[q].running;
-    }
-    if (sig !== this._badgeSig) {
-      this._badgeSig = sig;
-      this._badges = info;
-      this._paintBadges();
-    }
-    var anyActive = false;
-    for (var k = 0; k < info.length; k++) if (info[k].finishes) anyActive = true;
-    var self = this;
-    if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
-    if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    var ES = window.EchoShow;
+    if (ES && ES.timerBadges) ES.timerBadges(this);
   };
 
   // The big countdown over this page (echo-show-common's <echo-timer-overlay>).
-  EchoWeatherCard.prototype._overlayTimers = function () {
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
-    return [];
-  };
   EchoWeatherCard.prototype._updateOverlay = function () {
     var el = this._ovEl;
     if (!el || !el.update) return;
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
-    el.update(this._hass, this._overlayTimers());
-  };
-
-  EchoWeatherCard.prototype._paintBadges = function () {
-    var info = this._badges || [];
-    for (var i = 0; i < info.length; i++) {
-      var el = this.shadowRoot.querySelector('.bdg[data-i="' + info[i].i + '"]');
-      if (!el) continue;
-      var b = info[i];
-      var txt = b.done ? "Done" : b.finishes ? fmtCountdown((b.finishes - Date.now()) / 1000) : b.paused ? fmtCountdown(b.paused) : "";
-      if (el.textContent !== txt) el.textContent = txt;
-      if (b.done !== el.classList.contains("done")) el.classList.toggle("done");
-    }
+    var b = this._config.buttons || [];
+    for (var i = 0; i < b.length; i++) if (b[i].timers) { el.path = b[i].navigation_path || null; break; }
+    el.update(this._hass);
   };
 
   // ---------- forecast subscriptions ----------
@@ -2819,15 +2925,16 @@
  *  - Alarms: the Kiosk Satellite app's own alarms. They live on the tablet and ring with no
  *    Home Assistant, network or dashboard; the card lists, adds, edits and switches them.
  *  - Stopwatch: start/stop, laps (best and worst marked), kept per display across reloads.
- *  - Timers: up to three HA timer helpers with countdown rings, pause/resume, adjust and
- *    cancel; new ones are picked on hour/minute/second wheels. Rings with Web Audio.
+ *  - Timers: this display's Kiosk Satellite timers (EchoShow.timers in echo-show-common), the
+ *    same ones voice sets, with countdown rings, pause/resume, adjust and cancel; new ones are
+ *    picked on hour/minute/second wheels. Kiosk Satellite rings them.
  *
  * Plain JavaScript, no dependencies, no build step. ES5-ish for older Chromium.
  */
 (function () {
   "use strict";
 
-  var VERSION = "2.3.0";
+  var VERSION = "3.0.0";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -2836,23 +2943,13 @@
   var ADJ = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 60];
   var CIRC = 2 * Math.PI * 45;
 
+  function timers() { return window.EchoShow && window.EchoShow.timers; }
+
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
-  // "H:MM:SS" (optionally "N day(s), H:MM:SS") -> seconds
-  function parseDur(s) {
-    if (s === undefined || s === null) return 0;
-    if (typeof s === "number") return s;
-    s = String(s);
-    var days = 0;
-    var m = s.match(/^(\d+) days?, (.*)$/);
-    if (m) { days = parseInt(m[1], 10); s = m[2]; }
-    var p = s.split(":");
-    if (p.length !== 3) return 0;
-    return days * 86400 + parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
-  }
 
   function fmtClock(sec) {
     sec = Math.max(0, Math.ceil(sec));
@@ -3020,13 +3117,16 @@
 
   // ---------- alarm settings popup (<echo-alarm-settings>) ----------
   // Opened from the timer page's settings button. Everything is stored in HA helpers so
-  // the settings are shared by every screen and by the "alarm when finished" automation.
+  // the settings are shared by every screen and by the "Timer finished" automation.
+  // In the settings panel it shows only the volume (tones: false, test: false): Kiosk Satellite
+  // rings timers with its own chime.
 
   var SET_DEFAULTS = {
     volume_entity: "input_number.echo_timer_alarm_volume",   // device volume while ringing
     tone_entity: "input_select.echo_timer_alarm_tone",
     device_volume_entity: null,                               // e.g. number.<tablet>_volume (for Test)
-    timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"],
+    tones: true,                                              // show the tone grid
+    test: true,                                               // show the Test button
   };
 
   var SET_STYLE = [
@@ -3092,8 +3192,8 @@
       '<div class="bd"></div><div class="panel"><div class="hd"><h2>Timer alarm</h2><div class="done" role="button">Done</div></div>' +
       '<div class="lbl"><span>Volume</span><span class="vv"></span></div>' +
       '<div class="vrow"><ha-icon icon="mdi:volume-low"></ha-icon><div class="track"><div class="fill"></div></div><ha-icon icon="mdi:volume-high"></ha-icon></div>' +
-      '<div class="lbl"><span>Tone</span></div><div class="tones">' + tones + "</div>" +
-      '<div class="test" role="button"><ha-icon icon="mdi:play"></ha-icon>Test</div>' +
+      (this._cfg.tones ? '<div class="lbl"><span>Tone</span></div><div class="tones">' + tones + "</div>" : "") +
+      (this._cfg.test ? '<div class="test" role="button"><ha-icon icon="mdi:play"></ha-icon>Test</div>' : "") +
       '<div class="dev"></div></div>';
     this._fill = root.querySelector(".fill");
     this._vv = root.querySelector(".vv");
@@ -3172,12 +3272,8 @@
   };
 
   EchoAlarmSettings.prototype._ringing = function () {
-    var st = this._hass.states, list = this._cfg.timers || [];
-    for (var i = 0; i < list.length; i++) {
-      var t = st[list[i]], n = st["input_text." + list[i].split(".")[1] + "_name"];
-      if (t && t.state === "idle" && n && n.state && n.state !== "unknown" && n.state !== "unavailable") return true;
-    }
-    return false;
+    var T = window.EchoShow && window.EchoShow.timers;
+    return !!T && T.list().some(function (t) { return t.finished; });
   };
 
   // Play one cycle of a tone at the alarm volume (temporarily setting the tablet's
@@ -3571,8 +3667,28 @@
     ".wheel.hrs.unitd .wi{padding-right:calc(var(--ww,13vh) * .62);}",
     ".wheel.hrs .wu{left:52%;}",
     ".wheel.ampm{width:11vh;}",
-    /* ===== timers (HA timer helpers) ===== */
+    /* ===== timers (this display's Kiosk Satellite timers) ===== */
     ".main{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:stretch;gap:2vh;width:100%;}",
+    /* four or more: a grid of smaller tiles, two rows on screen */
+    ".mgrid{flex:1 1 auto;min-width:0;display:grid;gap:2vh;grid-template-columns:repeat(var(--mcols,3),minmax(0,1fr));grid-auto-rows:calc(50% - 1vh);overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch;}",
+    ".main.many .tile{padding:1.2vh 1.4vh 1.4vh;}",
+    ".main.many .head{font-size:2.8vh;}",
+    ".main.many .sub{font-size:2.1vh;margin-top:.6vh;}",
+    ".main.many .ctl{gap:1.6vh;}",
+    ".main.many .rb{width:7vh;height:7vh;}",
+    ".main.many .rb ha-icon{--mdc-icon-size:3.6vh;width:3.6vh;height:3.6vh;}",
+    ".main.many .wide{height:7vh;font-size:2.8vh;padding:0 2.4vh;}",
+    ".main.many .adj .big{font-size:6vh;}",
+    ".main.many .atrack{height:7vh;}",
+    ".main.many .atrack .knob{width:5vh;height:5vh;margin:-2.5vh 0 0 -2.5vh;}",
+    ".main.many .ahint,.main.many .adj .delta{font-size:2.2vh;}",
+    ".tname{width:var(--gow,46vh);max-width:94%;height:6.4vh;box-sizing:border-box;border-radius:3.2vh;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.22);color:#fff;font:inherit;font-size:2.8vh;text-align:center;padding:0 2vh;outline:none;-webkit-user-select:text;user-select:text;}",
+    ".tname:focus{border-color:rgba(var(--es-acc-rgb,255,159,10),.7);}",
+    ".tname::placeholder{color:rgba(255,255,255,.4);}",
+    ".tile.tmsg{justify-content:center;gap:2vh;text-align:center;font-size:3vh;color:rgba(255,255,255,.6);}",
+    ".tile.tmsg ha-icon{--mdc-icon-size:12vh;width:12vh;height:12vh;opacity:.4;}",
+    ".tile.tmsg b{font-size:4vh;font-weight:400;color:rgba(255,255,255,.88);}",
+    ".tile.tmsg .msg{max-width:90vh;line-height:1.35;}",
     ".main.solo .tile{background:none;border-color:transparent;box-shadow:none;}",
     ".main.solo .tile.done::before{border-radius:3.6vh;}",
     ".corner{position:absolute;top:-9.6vh;right:0;z-index:3;width:8vh;height:8vh;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;" +
@@ -3768,7 +3884,7 @@
     self._sig = "";
     self._tick = null;
     self._pending = {};
-    self._adj = null;                       // { slot, delta } while a timer is being adjusted
+    self._adj = null;                       // { id, delta } while a timer is being adjusted
     self._tw = { h: 0, m: 5, s: 0 };        // the new-timer wheels
     self._sw = swLoad();
     self._alarms = null;                    // last list from the kiosk
@@ -3816,24 +3932,9 @@
     this._prof = prof;
     for (k in this._raw) config[k] = this._raw[k];
     if (prof) for (k in prof) if (k !== "match") config[k] = prof[k];
-    // A configured timer_prefix wins; else this display's own set (timer.<device>_timer_N), else the shared one.
-    this._fixedPrefix = !!(config.timer_prefix || config.slots);
-    var prefix = config.timer_prefix || this._ownPrefix || "echo_timer";
-    var slots = config.slots;
-    if (!slots) {
-      slots = [];
-      for (var i = 1; i <= 3; i++) slots.push({ timer: "timer." + prefix + "_" + i, name: "input_text." + prefix + "_" + i + "_name" });
-    }
     this._config = {
-      timer_prefix: prefix,
-      slots: slots,
-      start_script: config.start_script || "script.echo_timer_start",
-      cancel_script: config.cancel_script || "script.echo_timer_cancel",
-      presets: config.presets || DEFAULT_PRESETS,
+      presets: config.presets || DEFAULT_PRESETS,    // minutes, or {name, minutes} / {name, seconds}
       buttons: config.buttons || [],
-      alarm: config.alarm !== false,                 // sound the timer alarm in this browser
-      tone_entity: config.tone_entity || "input_select.echo_timer_alarm_tone",
-      satellite: config.satellite || null,           // assist_satellite.*: timer alarm pauses while it listens
       idle_timeout: config.idle_timeout !== undefined ? config.idle_timeout : 180,
       idle_path: config.idle_path || null,
       settings: config.settings || {},
@@ -3856,10 +3957,8 @@
       var first = !this._hass;
       this._hass = hass;
       if (!this._config) return;
-      if (!this._fixedPrefix) {
-        var ES = window.EchoShow, own = ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null;
-        if (own && own !== this._ownPrefix) { this._ownPrefix = own; this._applyProfile(this._prof || null); this._sig = ""; }
-      }
+      var T = timers();
+      if (T) T.hass(hass);
       if (!this._built) { this._build(); this._startIdle(); }
       this._update();
       this._alarmState();
@@ -3879,11 +3978,12 @@
     }
     this._startIdle();
     this._subscribeAlarmEvents();
+    this._timersOn();
   };
 
   EchoClockCard.prototype.disconnectedCallback = function () {
     this._stopTick();
-    this._alarmStop();
+    if (this._tmUnsub) { this._tmUnsub(); this._tmUnsub = null; }
     this._stopIdle();
     this._swStopRaf();
     this._closeSheet();
@@ -3893,57 +3993,6 @@
     }
     if (this._adj) { this._adj = null; this._sig = ""; }
     if (this._settingsEl) this._settingsEl.close();
-  };
-
-  // ---------- timer alarm loop ----------
-
-  var VOICE_BUSY = { listening: 1, processing: 1, responding: 1 };
-
-  // The assist satellite to watch: this display's native Kiosk Satellite one
-  // (assist_satellite.<device>_assist_satellite) when it has one, else the configured one. The configured
-  // one used to come first, so every display paused its timer alarm while the configured display listened.
-  EchoClockCard.prototype._satState = function () {
-    var h = this._hass, st = h ? h.states : null, id = this._config.satellite;
-    if (!st) return null;
-    var slug = this._devSlug;
-    if (slug) {
-      if (this._satAuto && st[this._satAuto] && st[this._satAuto].state !== "unavailable") return st[this._satAuto];
-      this._satAuto = null;
-      for (var k in st) {
-        if (k.indexOf("assist_satellite.") !== 0 || st[k].state === "unavailable") continue;
-        var o = k.slice(17);   // assist_satellite.<area>_<device>_assist_satellite, or assist_satellite.<device>
-        if ((o.indexOf(slug) !== -1 && /_assist_satellite$/.test(o)) || o === slug || o.slice(-slug.length - 1) === "_" + slug) { this._satAuto = k; return st[k]; }
-      }
-    }
-    return id ? st[id] || null : null;
-  };
-
-  EchoClockCard.prototype._voiceBusy = function () {
-    var sat = this._satState();
-    if (sat && VOICE_BUSY[sat.state]) return true;
-    return !!(this._voiceHold && Date.now() < this._voiceHold);
-  };
-
-  EchoClockCard.prototype._alarmCycle = function () {
-    var self = this;
-    if (!this._alarmOn) return;
-    var tone = this._hass && this._hass.states[this._config.tone_entity] ? this._hass.states[this._config.tone_entity].state : "Chime";
-    var len = Sound.cycle(tone);
-    if (!this._voiceBusy()) len = Sound.play(tone, 1) || len;
-    this._alarmTimer = setTimeout(function () { self._alarmCycle(); }, len * 1000);
-  };
-
-  EchoClockCard.prototype._alarmStart = function () {
-    if (this._alarmOn || !this._config.alarm) return;
-    this._alarmOn = true;
-    this._alarmCycle();
-  };
-
-  EchoClockCard.prototype._alarmStop = function () {
-    if (!this._alarmOn) return;
-    this._alarmOn = false;
-    if (this._alarmTimer) { clearTimeout(this._alarmTimer); this._alarmTimer = null; }
-    Sound.hush();
   };
 
   // ---------- go back to the home view after a period without touches ----------
@@ -4059,7 +4108,13 @@
     this._mainEl.addEventListener("click", function (ev) {
       var t = ev.target.closest ? ev.target.closest("[data-act]") : null;
       if (!t) return;
-      self._action(t.getAttribute("data-act"), parseInt(t.getAttribute("data-slot"), 10), t);
+      self._action(t.getAttribute("data-act"), t.getAttribute("data-id"), t);
+    });
+    // The new timer's name: kept across re-renders; Enter closes the keyboard.
+    this._mainEl.addEventListener("input", function (ev) { if (ev.target.classList.contains("tname")) self._tname = ev.target.value; });
+    this._mainEl.addEventListener("keydown", function (ev) { if (ev.key === "Enter" && ev.target.blur) ev.target.blur(); });
+    this._mainEl.addEventListener("focusout", function () {
+      setTimeout(function () { if (self._renderLater && !self._typing() && !self._wheelBusy()) { self._renderLater = false; self._render(); } }, 0);
     });
     var drag = null;
     this._mainEl.addEventListener("pointerdown", function (ev) {
@@ -4093,8 +4148,7 @@
       var sc = {}, k;
       for (k in (btn.settings || {})) sc[k] = btn.settings[k];
       for (k in (self._config.settings || {})) sc[k] = self._config.settings[k];
-      sc.timers = self._config.slots.map(function (s) { return s.timer; });
-      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { timers: sc.timers, alarm: sc });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(self, { alarm: sc });
       else window.EchoAlarmSettingsOpen(self, self._rootEl, sc);
     } else if (btn.navigation_path) {
       navigate(btn.navigation_path);
@@ -4126,11 +4180,11 @@
   // Which tab a visit opens on: Timers when one is ringing or just started (by voice, say),
   // otherwise the tab last used on this display.
   EchoClockCard.prototype._pickTabOnShow = function () {
-    var items = this._hass ? this._slots() : [];
-    var now = Date.now(), want = null;
+    var items = this._hass ? this._timerItems() : [];
+    var want = null;
     for (var i = 0; i < items.length; i++) {
       if (items[i].state === "done") want = "timers";
-      if (items[i].state === "active" && items[i].duration && now - (items[i].finishes - items[i].duration * 1000) < 15000) want = "timers";
+      if (items[i].state === "active" && items[i].duration && items[i].duration - this._left(items[i]) < 15) want = "timers";
     }
     if (!want) {
       var p = window.EchoShow && window.EchoShow.prefs ? window.EchoShow.prefs.get("clock_tab") : null;
@@ -4774,76 +4828,56 @@
     this._sheet = null;
   };
 
-  // ---------- timers (HA timer helpers) ----------
+  // ---------- timers (this display's Kiosk Satellite timers) ----------
 
-  EchoClockCard.prototype._slots = function () {
-    var out = [];
-    var st = this._hass.states;
-    for (var i = 0; i < this._config.slots.length; i++) {
-      var cfg = this._config.slots[i];
-      var t = st[cfg.timer];
-      if (!t) continue;
-      var n = st[cfg.name] ? st[cfg.name].state : "";
-      if (n === "unknown" || n === "unavailable") n = "";
-      var s = t.state;
-      if (s === "idle" && !n) continue; // free slot
-      var a = t.attributes || {};
-      out.push({
-        slot: i + 1,
-        timer: cfg.timer,
-        name: n || "Timer",
-        state: s === "idle" ? "done" : s,
-        duration: parseDur(a.duration),
-        remaining: parseDur(a.remaining),
-        finishes: a.finishes_at ? Date.parse(a.finishes_at) : 0,
-      });
-    }
-    return out;
+  EchoClockCard.prototype._timersOn = function () {
+    var T = timers(), self = this;
+    if (!T || this._tmUnsub) return;
+    this._tmUnsub = T.subscribe(function () { if (self._built) self._update(); });
   };
 
-  EchoClockCard.prototype._item = function (slot) {
+  // The list as the tiles need it: { id, name (label), state: active/paused/done, duration, t (store item) }.
+  EchoClockCard.prototype._timerItems = function () {
+    var T = timers();
+    if (!T) return [];
+    var order = { done: 0, active: 1, paused: 1 };
+    return T.list().map(function (t) {
+      return { id: t.id, name: T.label(t), state: t.finished ? "done" : t.active ? "active" : "paused", duration: t.total, t: t };
+    }).sort(function (a, b) { return order[a.state] - order[b.state]; });
+  };
+
+  EchoClockCard.prototype._item = function (id) {
     var items = this._items || [];
-    for (var i = 0; i < items.length; i++) if (items[i].slot === slot) return items[i];
+    for (var i = 0; i < items.length; i++) if (items[i].id === id) return items[i];
     return null;
   };
 
   EchoClockCard.prototype._left = function (it) {
-    if (!it) return 0;
-    if (it.state === "active") return Math.max(0, (it.finishes - Date.now()) / 1000);
-    if (it.state === "paused") return it.remaining;
-    return 0;
+    var T = timers();
+    return it && T ? T.left(it.t) : 0;
   };
 
   EchoClockCard.prototype._update = function () {
     if (!this._hass) return;
-    var slots = this._slots();
-    var sig = JSON.stringify(slots);
+    var T = timers(), items = this._timerItems();
+    var status = T ? T.status(this._hass) : "none";
+    var sig = status + JSON.stringify(items.map(function (x) { return [x.id, x.name, x.state, x.duration, Math.round(x.t.ends / 1000), x.state === "paused" ? Math.round(x.t.left) : 0]; }));
     if (sig !== this._sig) {
       var wasDone = (this._items || []).some(function (x) { return x.state === "done"; });
       if (this._sig) this._touch();
       this._sig = sig;
-      this._items = slots;
+      this._status = status;
+      this._items = items;
       if (this._adj) {
-        var a = this._item(this._adj.slot);
+        var a = this._item(this._adj.id);
         if (!a || a.state === "done") this._adj = null;
       }
-      var nowDone = slots.some(function (x) { return x.state === "done"; });
+      var nowDone = items.some(function (x) { return x.state === "done"; });
       if (nowDone && !wasDone && this._tab !== "timers" && !this._sheet) this._setTab("timers", false);
       else this._render();
       this._badges();
     }
-    var sat = this._satState();
-    if (sat && VOICE_BUSY[sat.state]) {
-      if (this._alarmOn) Sound.hush();
-      this._voiceHold = Date.now() + 4000;
-    }
-    var ticking = false, ringing = false;
-    for (var i = 0; i < slots.length; i++) {
-      if (slots[i].state === "active") ticking = true;
-      if (slots[i].state === "done") ringing = true;
-    }
-    if (ticking) this._startTick(); else this._stopTick();
-    if (ringing) this._alarmStart(); else this._alarmStop();
+    if (items.some(function (x) { return x.state === "active"; })) this._startTick(); else this._stopTick();
   };
 
   EchoClockCard.prototype._startTick = function () {
@@ -4858,36 +4892,64 @@
 
   EchoClockCard.prototype._render = function () {
     if (!this._built || this._tab !== "timers") return;
-    if (this._wheelBusy()) { this._renderLater = true; return; }
+    if (this._wheelBusy() || this._typing()) { this._renderLater = true; return; }
     var items = this._items || [];
-    var canAdd = items.length < this._config.slots.length;
-    if (!canAdd || !items.length) this._adding = false;
-    var showAdd = canAdd && (!items.length || this._adding);
-    var cols = items.length + (showAdd ? 1 : 0);
     var host = this.shadowRoot.host;
-    this._mainEl.className = "main" + (cols <= 1 ? " solo" : "");
-    host.style.setProperty("--ring", (cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
-    host.style.setProperty("--clock", (cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
+    if (this._status !== "ok" && !items.length) {
+      this._mainEl.className = "main solo";
+      this._mainEl.innerHTML = this._unsupportedHtml();
+      this._twWheels = [];
+      return;
+    }
+    if (!items.length) this._adding = false;
+    var showAdd = !items.length || this._adding;
+    // Adding with three or more timers: the new-timer wheels get the whole page.
+    var only = showAdd && items.length >= 3;
+    var many = !only && items.length >= 4;
+    var cols = only ? 1 : many ? Math.min(3, Math.ceil(items.length / 2)) : items.length + (showAdd ? 1 : 0);
+    this._mainEl.className = "main" + (cols <= 1 && !many ? " solo" : "") + (many ? " many" : "");
+    host.style.setProperty("--ring", (many ? 19 : cols <= 1 ? 50 : cols === 2 ? 38 : 31) + "vh");
+    host.style.setProperty("--clock", (many ? 5.2 : cols >= 3 ? 7.4 : cols === 2 ? 9 : 11.5) + "vh");
     host.style.setProperty("--gow", (cols <= 1 ? 52 : cols === 2 ? 44 : 36) + "vh");
     // Tall wheels: big rows are easier to flick and to land on with a finger.
     host.style.setProperty("--ww", (cols <= 1 ? 20 : cols === 2 ? 15 : 11.6) + "vh");
     host.style.setProperty("--wrow", (cols <= 1 ? 9 : cols === 2 ? 8.2 : 7.4) + "vh");
     host.style.setProperty("--wfs", (cols <= 1 ? 6 : cols === 2 ? 5.2 : 4.6) + "vh");
+    host.style.setProperty("--mcols", String(cols));
 
     var h = "";
-    for (var i = 0; i < items.length; i++) {
-      h += (this._adj && this._adj.slot === items[i].slot) ? this._adjustHtml(items[i]) : this._timerHtml(items[i]);
+    if (!only) {
+      for (var i = 0; i < items.length; i++) {
+        h += (this._adj && this._adj.id === items[i].id) ? this._adjustHtml(items[i], i) : this._timerHtml(items[i], i);
+      }
+      if (many) h = '<div class="mgrid">' + h + "</div>";       // scrolls; the corner button stays outside it
     }
-    if (showAdd) h += this._adderHtml(items.length, cols);
-    if (canAdd && items.length && !showAdd) {
+    if (showAdd) h += this._adderHtml(only ? 0 : items.length, cols);
+    if (items.length && !showAdd) {
       h += '<div class="corner plus" role="button" data-act="add-open"><ha-icon icon="mdi:plus"></ha-icon></div>';
     } else if (showAdd && items.length) {
       h += '<div class="corner" role="button" data-act="add-close"><ha-icon icon="mdi:close"></ha-icon></div>';
     }
     this._mainEl.innerHTML = h;
+    var nin = this._mainEl.querySelector(".tname");
+    if (nin) nin.value = this._tname || "";
     this._mountTimerWheels();
     this._paintAdjust();
     this._paintTimes();
+  };
+
+  // What's missing on this display for timers to show here.
+  EchoClockCard.prototype._unsupportedHtml = function () {
+    var s = this._status, msg;
+    if (s === "old") msg = "Update Kiosk Satellite on this display to 2026.10.14 or later to see and start its timers here.";
+    else if (s === "unknown") msg = "This page doesn't know which display it is on. Open it on a Kiosk Satellite display, or add ?echo_display=&lt;display name&gt; to the address.";
+    else msg = "Home Assistant has no Kiosk Satellite timer actions for this display. In Kiosk Satellite, run Voice Satellite natively and turn on Settings › ESPHome › Expose kiosk entities.";
+    return '<div class="tile tmsg"><ha-icon icon="mdi:timer-off-outline"></ha-icon><b>Timers aren\'t available</b><div class="msg">' + msg + "</div></div>";
+  };
+
+  EchoClockCard.prototype._typing = function () {
+    var ae = this.shadowRoot && this.shadowRoot.activeElement;
+    return !!(ae && ae.classList && ae.classList.contains("tname"));
   };
 
   EchoClockCard.prototype._wheelBusy = function () {
@@ -4896,25 +4958,25 @@
     return false;
   };
 
-  EchoClockCard.prototype._timerHtml = function (it) {
-    var ctl;
+  EchoClockCard.prototype._timerHtml = function (it, n) {
+    var ctl, id = esc(it.id);
     if (it.state === "done") {
       ctl = '<div class="ctl">' +
-        '<div class="wide more" role="button" data-act="more" data-slot="' + it.slot + '">+1 min</div>' +
-        '<div class="wide dismiss" role="button" data-act="cancel" data-slot="' + it.slot + '">Dismiss</div></div>';
+        '<div class="wide more" role="button" data-act="more" data-id="' + id + '">+1 min</div>' +
+        '<div class="wide dismiss" role="button" data-act="stop" data-id="' + id + '">Stop</div></div>';
     } else {
       var paused = it.state === "paused";
       ctl = '<div class="ctl">' +
-        '<div class="rb" role="button" data-act="cancel" data-slot="' + it.slot + '"><ha-icon icon="mdi:close"></ha-icon></div>' +
-        '<div class="rb" role="button" data-act="adjust" data-slot="' + it.slot + '"><ha-icon icon="mdi:plus-minus-variant"></ha-icon></div>' +
-        '<div class="rb ' + (paused ? "play" : "pause") + '" role="button" data-act="' + (paused ? "resume" : "pause") + '" data-slot="' + it.slot + '">' +
+        '<div class="rb" role="button" data-act="cancel" data-id="' + id + '"><ha-icon icon="mdi:close"></ha-icon></div>' +
+        '<div class="rb" role="button" data-act="adjust" data-id="' + id + '"><ha-icon icon="mdi:plus-minus-variant"></ha-icon></div>' +
+        '<div class="rb ' + (paused ? "play" : "pause") + '" role="button" data-act="' + (paused ? "resume" : "pause") + '" data-id="' + id + '">' +
         '<ha-icon icon="' + (paused ? "mdi:play" : "mdi:pause") + '"></ha-icon></div></div>';
     }
-    var gid = "g" + it.slot;
+    var gid = "g" + n;
     var c1 = it.state === "done" ? "#ff7a70" : "var(--es-hi2,#ffc15e)", c2 = it.state === "done" ? "#ff3b30" : "var(--es-acc2,#ff8a00)";
-    return '<div class="tile tcol ' + it.state + '" data-slot="' + it.slot + '">' +
+    return '<div class="tile tcol ' + it.state + '" data-id="' + id + '">' +
       '<div class="head"><span class="dot"></span><span class="nm">' + esc(it.name) + "</span></div>" +
-      '<div class="ring"' + (it.state === "done" ? "" : ' data-act="adjust" data-slot="' + it.slot + '"') + '>' +
+      '<div class="ring"' + (it.state === "done" ? "" : ' data-act="adjust" data-id="' + id + '"') + '>' +
       '<svg viewBox="0 0 100 100"><defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="1" y2="1">' +
       '<stop offset="0" style="stop-color:' + c1 + '"/><stop offset="1" style="stop-color:' + c2 + '"/></linearGradient></defs>' +
       '<circle class="trk" cx="50" cy="50" r="45"/>' +
@@ -4924,28 +4986,41 @@
   };
 
   EchoClockCard.prototype._adjustHtml = function (it) {
-    return '<div class="tile adj ' + it.state + '" data-slot="' + it.slot + '">' +
-      '<div class="head"><span class="nm">Adjust ' + esc(it.name === "Timer" ? "timer" : it.name) + "</span></div>" +
+    var id = esc(it.id);
+    return '<div class="tile adj ' + it.state + '" data-id="' + id + '">' +
+      '<div class="head"><span class="nm">Adjust ' + esc(it.name) + "</span></div>" +
       '<div class="mid2"><div class="big"></div><div class="delta"></div></div>' +
       '<div class="awrap"><div class="atrack"><div class="afill"></div><div class="zero"></div>' +
       '<div class="lm">−</div><div class="lp">+</div><div class="knob"></div></div>' +
       '<div class="ahint">Drag to add or remove time</div></div>' +
-      '<div class="ctl"><div class="wide cancel" role="button" data-act="adj-cancel" data-slot="' + it.slot + '">Cancel</div>' +
-      '<div class="wide apply" role="button" data-act="adj-apply" data-slot="' + it.slot + '">Apply</div></div>' +
+      '<div class="ctl"><div class="wide cancel" role="button" data-act="adj-cancel" data-id="' + id + '">Cancel</div>' +
+      '<div class="wide apply" role="button" data-act="adj-apply" data-id="' + id + '">Apply</div></div>' +
       "</div>";
   };
 
+  // Presets: minutes (5), or named ones ({name: Pasta, minutes: 10} / {name: Eggs, seconds: 390}).
+  function presetOf(p) {
+    if (typeof p === "number") return { secs: p * 60, name: "" };
+    if (!p) return null;
+    var secs = p.seconds !== undefined ? +p.seconds : (+p.minutes || 0) * 60 + (+p.hours || 0) * 3600;
+    return secs > 0 ? { secs: secs, name: String(p.name || "") } : null;
+  }
+
   EchoClockCard.prototype._adderHtml = function (count, cols) {
-    // Recently used lengths, newest first (like iOS); the configured presets until there are any.
-    var rec = recentsLoad(), list = rec.length ? rec : this._config.presets.map(function (m) { return m * 60; });
+    // Named presets always; then recently used lengths, newest first (like iOS), or the plain presets until there are any.
+    var rec = recentsLoad(), named = [], plain = [];
+    this._config.presets.forEach(function (p) { var o = presetOf(p); if (o) (o.name ? named : plain).push(o); });
+    var list = named.concat((rec.length ? rec.map(function (x) { return { secs: x, name: "" }; }) : plain));
     var chips = "", max = cols >= 3 ? 2 : cols === 2 ? 3 : 6;
     for (var i = 0; i < list.length && i < max; i++) {
-      chips += '<div class="chip" role="button" data-act="preset" data-sec="' + list[i] + '">' + esc(fmtLen(list[i])) + "</div>";
+      chips += '<div class="chip" role="button" data-act="preset" data-sec="' + list[i].secs + '" data-name="' + esc(list[i].name) + '">' +
+        esc(list[i].name ? list[i].name + " · " + fmtLen(list[i].secs) : fmtLen(list[i].secs)) + "</div>";
     }
     return '<div class="tile add">' +
       '<div class="cap">' + (count ? "Add a timer" : "New timer") + "</div>" +
       '<div class="wheels tw"></div>' +
-      '<div class="recents"><div class="rlbl">' + (rec.length ? "Recents" : "Quick picks") + '</div><div class="chips">' + chips + "</div></div>" +
+      '<input class="tname" type="text" maxlength="30" placeholder="Name (optional)" autocomplete="off" spellcheck="false">' +
+      '<div class="recents"><div class="rlbl">' + (rec.length || named.length ? "Recents" : "Quick picks") + '</div><div class="chips">' + chips + "</div></div>" +
       '<div class="go" role="button" data-act="start"><ha-icon icon="mdi:play"></ha-icon>Start</div>' +
       "</div>";
   };
@@ -4959,7 +5034,7 @@
       tw.h = self._twWheels[0].value(); tw.m = self._twWheels[1].value(); tw.s = self._twWheels[2].value();
       self._paintAdder();
     }
-    function onSettle() { onSpin(); if (self._renderLater) { self._renderLater = false; self._render(); } }
+    function onSettle() { onSpin(); if (self._renderLater && !self._typing()) { self._renderLater = false; self._render(); } }
     var opts = [["h", 0, 23, "hours", " hrs"], ["m", 0, 59, "min", ""], ["s", 0, 59, "sec", ""]];
     opts.forEach(function (o) {
       var w = new Wheel({ values: range(o[1], o[2]), index: tw[o[0]], unit: o[3], cls: "unitd" + o[4], onSpin: function () { if (self._twWheels.length === 3) onSpin(); }, onChange: onSettle });
@@ -4976,7 +5051,7 @@
     var secs = this._twSecs();
     var chips = this._mainEl.querySelectorAll(".chip");
     for (var i = 0; i < chips.length; i++) {
-      var on = parseInt(chips[i].getAttribute("data-sec"), 10) === secs;
+      var on = parseInt(chips[i].getAttribute("data-sec"), 10) === secs && (chips[i].getAttribute("data-name") || "") === (this._pname || "");
       if (on !== chips[i].classList.contains("sel")) chips[i].classList.toggle("sel");
     }
     var go = this._mainEl.querySelector(".go");
@@ -4986,7 +5061,7 @@
   // ---- adjust mode ----
 
   EchoClockCard.prototype._maxRemove = function () {
-    var it = this._adj ? this._item(this._adj.slot) : null;
+    var it = this._adj ? this._item(this._adj.id) : null;
     return Math.max(0, Math.floor((this._left(it) - 10) / 60));
   };
 
@@ -5003,9 +5078,15 @@
     }
   };
 
+  EchoClockCard.prototype._tileOf = function (cls, id) {
+    var els = this._mainEl.querySelectorAll(cls);
+    for (var i = 0; i < els.length; i++) if (els[i].getAttribute("data-id") === id) return els[i];
+    return null;
+  };
+
   EchoClockCard.prototype._paintAdjust = function () {
     if (!this._adj) return;
-    var tile = this._mainEl.querySelector('.adj[data-slot="' + this._adj.slot + '"]');
+    var tile = this._tileOf(".adj", this._adj.id);
     if (!tile) return;
     var d = this._adj.delta;
     var idx = 0;
@@ -5029,17 +5110,17 @@
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
       var left = this._left(it);
-      if (this._adj && this._adj.slot === it.slot) {
-        var big = this._mainEl.querySelector('.adj[data-slot="' + it.slot + '"] .big');
+      if (this._adj && this._adj.id === it.id) {
+        var at = this._tileOf(".adj", it.id), big = at && at.querySelector(".big");
         if (big) {
           var nt = fmtClock(Math.max(10, left + this._adj.delta * 60));
           if (big.textContent !== nt) big.textContent = nt;
         }
         continue;
       }
-      var col = this._mainEl.querySelector('.tcol[data-slot="' + it.slot + '"]');
+      var col = this._tileOf(".tcol", it.id);
       if (!col) continue;
-      var total = it.duration > 0 ? it.duration : Math.max(left, 1);
+      var total = it.duration > 0 ? Math.max(it.duration, left) : Math.max(left, 1);
       var frac = it.state === "done" ? 1 : Math.max(0, Math.min(1, left / total));
       var clock = col.querySelector(".clock");
       var txt = it.state === "done" ? "0:00" : fmtClock(left);
@@ -5051,7 +5132,7 @@
       col.querySelector(".arc").setAttribute("stroke-dashoffset", (CIRC * (1 - frac)).toFixed(2));
       var sub = col.querySelector(".sub");
       var subHtml;
-      if (it.state === "active") subHtml = '<ha-icon icon="mdi:bell-outline"></ha-icon>' + fmtEnds(it.finishes);
+      if (it.state === "active") subHtml = '<ha-icon icon="mdi:bell-outline"></ha-icon>' + fmtEnds(Date.now() + left * 1000);
       else if (it.state === "paused") subHtml = "Paused";
       else subHtml = "Done";
       if (sub.getAttribute("data-h") !== subHtml) { sub.innerHTML = subHtml; sub.setAttribute("data-h", subHtml); }
@@ -5060,14 +5141,30 @@
 
   // ---------- timer actions ----------
 
-  EchoClockCard.prototype._action = function (act, slot, el) {
-    var hass = this._hass;
-    if (!hass) return;
-    var cfg = this._config;
-    var timer = slot ? cfg.slots[slot - 1].timer : null;
-    var scr = function (id) { return id.replace(/^script\./, ""); };
+  var VERB = { pause: "pause", resume: "resume", cancel: "cancel", add: "change", remove: "change" };
+
+  // A change through Kiosk Satellite (on the kiosk) or Home Assistant (elsewhere); says why when it fails.
+  EchoClockCard.prototype._ctl = function (id, action, secs) {
+    var T = timers(), self = this;
+    if (!T) return;
+    T.control(id, action, secs).then(null, function (e) {
+      if (T.clash(id)) {
+        var t = T.list().filter(function (x) { return x.id === id; })[0];
+        self._toast("Home Assistant can't tell this timer apart from " + (t && t.name ? "another named " + T.label(t) : "another unnamed " + fmtLen(t ? t.total : 0) + " one") +
+          ", so it can't change just one. Say \u201ccancel all timers\u201d or let one run out. Named timers avoid this.");
+      }
+      else self._toast("Couldn't " + VERB[action] + " the timer" + (e && e.message ? ": " + e.message : "."));
+      T.refresh();
+    });
+  };
+
+  EchoClockCard.prototype._action = function (act, id, el) {
+    var hass = this._hass, T = timers(), self = this;
+    if (!hass || !T) return;
+    var it = id ? this._item(id) : null;
     if (act === "preset") {
       var sec = parseInt(el.getAttribute("data-sec"), 10);
+      this._pname = el.getAttribute("data-name") || "";
       this._tw = { h: Math.floor(sec / 3600), m: Math.floor(sec / 60) % 60, s: sec % 60 };
       var tw = this._tw, w = this._twWheels || [];
       if (w.length === 3) { w[0].set(tw.h, true); w[1].set(tw.m, true); w[2].set(tw.s, true); }
@@ -5077,17 +5174,25 @@
       if (!secs) return;
       if (this._pending.start && now - this._pending.start < 1500) return; // debounce double taps
       this._pending.start = now;
+      // The name typed, else the preset's, else the length ("10 min"); made unique on the kiosk.
+      var pre = this._pname && this._mainEl.querySelector(".chip.sel") ? this._pname : "";
+      var name = (this._tname || "").trim() || pre || fmtLen(secs);
       this._adding = false;
+      this._tname = "";
+      this._pname = "";
+      var ae = this.shadowRoot.activeElement;
+      if (ae && ae.blur) ae.blur();                                    // closes the keyboard
       recentsAdd(secs);
-      hass.callService("script", scr(cfg.start_script), { duration: secs, navigate: false, prefix: cfg.timer_prefix });
-    } else if (act === "pause") {
-      hass.callService("timer", "pause", { entity_id: timer });
-    } else if (act === "resume") {
-      hass.callService("timer", "start", { entity_id: timer });
-    } else if (act === "cancel") {
-      hass.callService("script", scr(cfg.cancel_script), { slot: slot, prefix: cfg.timer_prefix });
+      T.start(name, secs).then(null, function (e) { self._toast("Couldn't start the timer" + (e && e.message ? ": " + e.message : ".")); });
+      this._render();
+    } else if (act === "pause" || act === "resume" || act === "cancel") {
+      this._ctl(id, act);
+    } else if (act === "stop") {
+      T.stop().then(null, function (e) { self._toast("Couldn't stop the alert" + (e && e.message ? ": " + e.message : ".")); });
     } else if (act === "more") {
-      hass.callService("timer", "start", { entity_id: timer, duration: 60 });
+      // A finished timer can't take more time: silence it and start the same name again for a minute.
+      var nm = it && it.t.name ? it.t.name : "";
+      T.stop().then(function () { return T.start(nm || "1 min", 60); }).then(null, function (e) { self._toast("Couldn't add a minute" + (e && e.message ? ": " + e.message : ".")); });
     } else if (act === "add-open") {
       this._adding = true;
       this._render();
@@ -5095,21 +5200,15 @@
       this._adding = false;
       this._render();
     } else if (act === "adjust") {
-      this._adj = { slot: slot, delta: 0 };
+      this._adj = { id: id, delta: 0 };
       this._render();
     } else if (act === "adj-cancel") {
       this._adj = null;
       this._render();
     } else if (act === "adj-apply") {
-      var it = this._item(slot), d = this._adj ? this._adj.delta : 0;
+      var d = this._adj ? this._adj.delta : 0;
       this._adj = null;
-      if (it && d) {
-        var s2 = Math.max(10, Math.round(this._left(it) + d * 60));
-        var p = hass.callService("timer", "start", { entity_id: timer, duration: s2 });
-        if (it.state === "paused" && p && p.then) {
-          p.then(function () { hass.callService("timer", "pause", { entity_id: timer }); });
-        }
-      }
+      if (it && d) this._ctl(id, d > 0 ? "add" : "remove", Math.abs(d) * 60);
       this._render();
     }
   };
@@ -5156,7 +5255,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.15.1";
+  var VERSION = "1.15.2";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -5174,18 +5273,6 @@
     sec = Math.max(0, Math.floor(sec || 0));
     var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
     return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (s < 10 ? "0" : "") + s;
-  }
-
-  function fmtCountdown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
-  }
-
-  function parseHms(s) {
-    var p = String(s || "").split(":");
-    if (p.length !== 3) return 0;
-    return parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
   }
 
   function navigate(path) {
@@ -5212,8 +5299,6 @@
     return window.__echoDisplayP;
   }
 
-  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
-  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -5699,17 +5784,16 @@
     }
     this._raw = config;
     this._applyProfile(null);
-    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+    if (!this._devL) {   // this display's device (area, timers) becomes known after the first render
       this._devL = true;
       var me = this;
-      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._sig = ""; me.hass = me._hass; } });
     }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
       if (!prof) return;
       self._applyProfile(prof);
-      self._badgeSig = "";
       if (!self._manual) self._sel = -1;
       if (self._built && self._hass) self._update(true);
     });
@@ -5739,7 +5823,6 @@
         src: "input_text.echo_media_src_" + this._localSlug, maId: null, local: true });
     }
     this._rooms = rooms;
-    this._timerPrefix = c.timer_prefix || null;
     this._config = {
       ma_config_entry: c.ma_config_entry || null,
       default_player: c.default_player || null,
@@ -5815,10 +5898,9 @@
 
   EchoMediaCard.prototype.disconnectedCallback = function () {
     if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
-    this._runSeen = null; this._doneSeen = null;
     this._stopIdle();
     this._stopTick();
-    if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    if (window.EchoShow && window.EchoShow.timerBadgesDetach) window.EchoShow.timerBadgesDetach(this);
     this._closeOverlays();
     if (this._maOff) { this._maOff(); this._maOff = null; }
     if (this._settingsEl) this._settingsEl.close();
@@ -6143,7 +6225,7 @@
   EchoMediaCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
     if ((btn.action === "settings" || btn.action === "timer-settings") && window.EchoShow && window.EchoShow.openSettings) {
-      window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      window.EchoShow.openSettings(this, {});
     } else if (btn.action === "timer-settings") {
       if (!window.EchoAlarmSettingsOpen) return; // provided by echo-timer-card.js
       var sc = {}, k;
@@ -7627,97 +7709,19 @@
 
   // ---------- timer badges on nav buttons (same behaviour as echo-weather-card) ----------
 
-  EchoMediaCard.prototype._timersFor = function (btn) {
-    if (!btn.timers) return null;
-    var pfx = this._timerPrefix || ownTimers(this._hass);
-    if (!pfx) return btn.timers;
-    var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
-    return out;
-  };
-
   EchoMediaCard.prototype._updateBadges = function () {
-    var buttons = this._config.buttons || [];
-    var st = this._hass.states;
-    var info = [], sig = "";
-    for (var i = 0; i < buttons.length; i++) {
-      if (!buttons[i].timers) continue;
-      var b = { i: i, done: false, finishes: 0, paused: 0, running: [] };
-      var list = this._timersFor(buttons[i]);
-      for (var j = 0; j < list.length; j++) {
-        var t = st[list[j]];
-        if (!t) continue;
-        var nm = st["input_text." + list[j].split(".")[1] + "_name"];
-        var named = nm && nm.state && nm.state !== "unknown" && nm.state !== "unavailable";
-        if (t.state === "active" || t.state === "paused") b.running.push(list[j]);
-        if (t.state === "active" && t.attributes.finishes_at) {
-          var f = Date.parse(t.attributes.finishes_at);
-          if (!b.finishes || f < b.finishes) b.finishes = f;
-        } else if (t.state === "paused") {
-          var r = parseHms(t.attributes.remaining);
-          if (!b.paused || r < b.paused) b.paused = r;
-        } else if (t.state === "idle" && named) {
-          b.done = true;
-        }
-        sig += list[j] + t.last_updated + (nm ? nm.state : "") + "|";
-      }
-      info.push(b);
-    }
-    if (!info.length) return;
-    // open_on_done / open_on_start: jump to the timers page (where the alarm rings).
-    // Only react to changes seen while this page is showing: the first update after the
-    // page opens just takes a snapshot (a timer started on another page isn't "new").
-    var armed = !!this._runSeen && this.isConnected;
-    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
-    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
-    for (var q = 0; this.isConnected && q < info.length; q++) {
-      var bt = buttons[info[q].i];
-      var prevRun = this._runSeen[info[q].i];
-      var started = false;
-      if (prevRun) for (var r2 = 0; r2 < info[q].running.length; r2++) if (prevRun.indexOf(info[q].running[r2]) === -1) started = true;
-      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) {
-        this._buttonTap(bt);
-      }
-      this._doneSeen[info[q].i] = info[q].done;
-      this._runSeen[info[q].i] = info[q].running;
-    }
-    if (sig !== this._badgeSig) {
-      this._badgeSig = sig;
-      this._badges = info;
-      this._paintBadges();
-    }
-    var anyActive = false;
-    for (var k = 0; k < info.length; k++) if (info[k].finishes) anyActive = true;
-    var self = this;
-    if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
-    if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    var ES = window.EchoShow;
+    if (ES && ES.timerBadges) ES.timerBadges(this);
   };
 
   // The big countdown over this page (echo-show-common's <echo-timer-overlay>). Hidden
   // while a panel (browse / speakers / queue) is open.
-  EchoMediaCard.prototype._overlayTimers = function () {
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
-    return [];
-  };
   EchoMediaCard.prototype._updateOverlay = function () {
     var el = this._ovEl;
     if (!el || !el.update) return;
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
-    el.update(this._hass, this._overlayTimers());
-  };
-
-  EchoMediaCard.prototype._paintBadges = function () {
-    var info = this._badges || [];
-    for (var i = 0; i < info.length; i++) {
-      var el = this.shadowRoot.querySelector('.bdg[data-i="' + info[i].i + '"]');
-      if (!el) continue;
-      var b = info[i];
-      var txt = b.done ? "Done" : b.finishes ? fmtCountdown((b.finishes - Date.now()) / 1000) : b.paused ? fmtCountdown(b.paused) : "";
-      if (el.textContent !== txt) el.textContent = txt;
-      if (b.done !== el.classList.contains("done")) el.classList.toggle("done");
-    }
+    var b = this._config.buttons || [];
+    for (var i = 0; i < b.length; i++) if (b[i].timers) { el.path = b[i].navigation_path || null; break; }
+    el.update(this._hass);
   };
 
   EchoMediaCard._fixImg = fixImg;
@@ -7750,7 +7754,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.0.2";
+  var VERSION = "1.0.3";
 
   function esc(s) {
     return String(s === undefined || s === null ? "" : s)
@@ -7770,8 +7774,6 @@
     if (window.EchoShow && window.EchoShow.displayName) return window.EchoShow.displayName();
     return Promise.resolve("");
   }
-  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
-  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -8094,10 +8096,10 @@
     if (!config || !config.entity) throw new Error("echo-climate-card: set entity (your climate.* thermostat)");
     this._raw = config;
     this._apply(null);
-    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+    if (!this._devL) {   // this display's device (area, timers) becomes known after the first render
       this._devL = true;
       var me = this;
-      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._sig = ""; me.hass = me._hass; } });
     }
     var self = this;
     echoDisplayName().then(function (name) {
@@ -8120,7 +8122,6 @@
       set_script: c.set_script || "echo_climate_set",
       house_script: c.house_script || "echo_house_set",
       outdoor: c.outdoor || null,
-      timer_prefix: c.timer_prefix || null,
       buttons: c.buttons || [],
       idle_timeout: c.idle_timeout !== undefined ? c.idle_timeout : 0,
       idle_path: c.idle_path || null,
@@ -8148,8 +8149,7 @@
   EchoClimateCard.prototype.disconnectedCallback = function () {
     this._stopIdle();
     this._closeSheet();
-    this._runSeen = null; this._doneSeen = null;
-    if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    if (window.EchoShow && window.EchoShow.timerBadgesDetach) window.EchoShow.timerBadgesDetach(this);
     if (this._settingsEl) this._settingsEl.close();
   };
 
@@ -8290,7 +8290,7 @@
   EchoClimateCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
     if (btn.action === "settings" || btn.action === "timer-settings") {
-      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, {});
     } else if (btn.navigation_path) navigate(btn.navigation_path);
     else if (btn.url) window.open(btn.url, "_self");
   };
@@ -9285,82 +9285,16 @@
   };
 
   // ---------- timers on the nav buttons + the countdown overlay (like the other pages) ----------
-  EchoClimateCard.prototype._timersFor = function (btn) {
-    if (!btn.timers) return null;
-    var pfx = this._config.timer_prefix || ownTimers(this._hass);
-    if (!pfx) return btn.timers;
-    var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
-    return out;
-  };
-  EchoClimateCard.prototype._overlayTimers = function () {
-    var b = this._config.buttons;
-    for (var i = 0; i < b.length; i++) if (b[i].timers) return this._timersFor(b[i]);
-    return [];
-  };
   EchoClimateCard.prototype._updateOverlay = function () {
     var el = this._ovEl;
     if (!el || !el.update) return;
-    var b = this._config.buttons;
+    var b = this._config.buttons || [];
     for (var i = 0; i < b.length; i++) if (b[i].timers) { el.path = b[i].navigation_path || null; break; }
-    el.update(this._hass, this._overlayTimers());
+    el.update(this._hass);
   };
-  function parseHms(s) {
-    var p = String(s || "").split(":");
-    return p.length === 3 ? parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]) : 0;
-  }
-  function fmtCountdown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
-  }
   EchoClimateCard.prototype._updateBadges = function () {
-    var buttons = this._config.buttons, st = this._hass.states, info = [], sig = "";
-    for (var i = 0; i < buttons.length; i++) {
-      if (!buttons[i].timers) continue;
-      var b = { i: i, done: false, finishes: 0, paused: 0, running: [] }, list = this._timersFor(buttons[i]);
-      for (var j = 0; j < list.length; j++) {
-        var t = st[list[j]];
-        if (!t) continue;
-        var nm = st["input_text." + list[j].split(".")[1] + "_name"];
-        var named = nm && nm.state && nm.state !== "unknown" && nm.state !== "unavailable";
-        if (t.state === "active" || t.state === "paused") b.running.push(list[j]);
-        if (t.state === "active" && t.attributes.finishes_at) {
-          var f = Date.parse(t.attributes.finishes_at);
-          if (!b.finishes || f < b.finishes) b.finishes = f;
-        } else if (t.state === "paused") {
-          var r = parseHms(t.attributes.remaining);
-          if (!b.paused || r < b.paused) b.paused = r;
-        } else if (t.state === "idle" && named) b.done = true;
-        sig += list[j] + t.last_updated + (nm ? nm.state : "") + "|";
-      }
-      info.push(b);
-    }
-    if (!info.length) return;
-    var armed = !!this._runSeen && this.isConnected;
-    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
-    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
-    for (var q = 0; this.isConnected && q < info.length; q++) {
-      var bt = buttons[info[q].i], prev = this._runSeen[info[q].i], started = false;
-      if (prev) info[q].running.forEach(function (id) { if (prev.indexOf(id) === -1) started = true; });
-      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) this._buttonTap(bt);
-      this._doneSeen[info[q].i] = info[q].done;
-      this._runSeen[info[q].i] = info[q].running;
-    }
-    if (sig !== this._badgeSig) { this._badgeSig = sig; this._badges = info; this._paintBadges(); }
-    var any = info.some(function (x) { return x.finishes; }), self = this;
-    if (any && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
-    if (!any && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
-  };
-  EchoClimateCard.prototype._paintBadges = function () {
-    var info = this._badges || [];
-    for (var i = 0; i < info.length; i++) {
-      var el = this.shadowRoot.querySelector('.bdg[data-i="' + info[i].i + '"]');
-      if (!el) continue;
-      var b = info[i], txt = b.done ? "Done" : b.finishes ? fmtCountdown((b.finishes - Date.now()) / 1000) : b.paused ? fmtCountdown(b.paused) : "";
-      if (el.textContent !== txt) el.textContent = txt;
-      if (b.done !== el.classList.contains("done")) el.classList.toggle("done");
-    }
+    var ES = window.EchoShow;
+    if (ES && ES.timerBadges) ES.timerBadges(this);
   };
 
   // ---------- back to the home view after a while ----------
@@ -9994,6 +9928,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.15.1", cards: ["echo-show-common 1.9.0","echo-weather-card 1.7.3","echo-clock-card 2.3.0","echo-media-card 1.15.1","echo-climate-card 1.0.2","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.15.1 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.16.0", cards: ["echo-show-common 2.0.0","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.16.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

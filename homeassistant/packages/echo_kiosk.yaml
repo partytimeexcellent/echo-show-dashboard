@@ -9,7 +9,7 @@
 #
 # Install:
 #   1. Copy custom_templates/echo_kiosk.py to <config>/custom_templates/echo_kiosk.py
-#      (next to echo_timers.jinja; Home Assistant ignores .py files there).
+#      (Home Assistant ignores .py files there).
 #   2. Copy this file to <config>/packages/echo_kiosk.yaml.
 #   3. In each tablet's Kiosk Satellite: Settings > Remote Administration, turn on
 #      Remote management and set an admin password.

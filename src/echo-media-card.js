@@ -17,7 +17,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.15.1";
+  var VERSION = "1.15.2";
 
   // media_player supported_features bits
   var F_PAUSE = 1, F_SEEK = 2, F_VOLUME = 4, F_MUTE = 8, F_PREV = 16, F_NEXT = 32, F_SHUFFLE = 32768, F_REPEAT = 262144;
@@ -35,18 +35,6 @@
     sec = Math.max(0, Math.floor(sec || 0));
     var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
     return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (s < 10 ? "0" : "") + s;
-  }
-
-  function fmtCountdown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
-  }
-
-  function parseHms(s) {
-    var p = String(s || "").split(":");
-    if (p.length !== 3) return 0;
-    return parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
   }
 
   function navigate(path) {
@@ -73,8 +61,6 @@
     return window.__echoDisplayP;
   }
 
-  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
-  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
   function matchDisplay(devices, name) {
     if (!devices || !name) return null;
     var n = String(name).toLowerCase();
@@ -560,17 +546,16 @@
     }
     this._raw = config;
     this._applyProfile(null);
-    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+    if (!this._devL) {   // this display's device (area, timers) becomes known after the first render
       this._devL = true;
       var me = this;
-      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._sig = ""; me.hass = me._hass; } });
     }
     var self = this;
     echoDisplayName().then(function (name) {
       var prof = matchDisplay(config.devices, name);
       if (!prof) return;
       self._applyProfile(prof);
-      self._badgeSig = "";
       if (!self._manual) self._sel = -1;
       if (self._built && self._hass) self._update(true);
     });
@@ -600,7 +585,6 @@
         src: "input_text.echo_media_src_" + this._localSlug, maId: null, local: true });
     }
     this._rooms = rooms;
-    this._timerPrefix = c.timer_prefix || null;
     this._config = {
       ma_config_entry: c.ma_config_entry || null,
       default_player: c.default_player || null,
@@ -676,10 +660,9 @@
 
   EchoMediaCard.prototype.disconnectedCallback = function () {
     if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
-    this._runSeen = null; this._doneSeen = null;
     this._stopIdle();
     this._stopTick();
-    if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    if (window.EchoShow && window.EchoShow.timerBadgesDetach) window.EchoShow.timerBadgesDetach(this);
     this._closeOverlays();
     if (this._maOff) { this._maOff(); this._maOff = null; }
     if (this._settingsEl) this._settingsEl.close();
@@ -1004,7 +987,7 @@
   EchoMediaCard.prototype._buttonTap = function (btn) {
     if (!btn) return;
     if ((btn.action === "settings" || btn.action === "timer-settings") && window.EchoShow && window.EchoShow.openSettings) {
-      window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      window.EchoShow.openSettings(this, {});
     } else if (btn.action === "timer-settings") {
       if (!window.EchoAlarmSettingsOpen) return; // provided by echo-timer-card.js
       var sc = {}, k;
@@ -2488,97 +2471,19 @@
 
   // ---------- timer badges on nav buttons (same behaviour as echo-weather-card) ----------
 
-  EchoMediaCard.prototype._timersFor = function (btn) {
-    if (!btn.timers) return null;
-    var pfx = this._timerPrefix || ownTimers(this._hass);
-    if (!pfx) return btn.timers;
-    var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
-    return out;
-  };
-
   EchoMediaCard.prototype._updateBadges = function () {
-    var buttons = this._config.buttons || [];
-    var st = this._hass.states;
-    var info = [], sig = "";
-    for (var i = 0; i < buttons.length; i++) {
-      if (!buttons[i].timers) continue;
-      var b = { i: i, done: false, finishes: 0, paused: 0, running: [] };
-      var list = this._timersFor(buttons[i]);
-      for (var j = 0; j < list.length; j++) {
-        var t = st[list[j]];
-        if (!t) continue;
-        var nm = st["input_text." + list[j].split(".")[1] + "_name"];
-        var named = nm && nm.state && nm.state !== "unknown" && nm.state !== "unavailable";
-        if (t.state === "active" || t.state === "paused") b.running.push(list[j]);
-        if (t.state === "active" && t.attributes.finishes_at) {
-          var f = Date.parse(t.attributes.finishes_at);
-          if (!b.finishes || f < b.finishes) b.finishes = f;
-        } else if (t.state === "paused") {
-          var r = parseHms(t.attributes.remaining);
-          if (!b.paused || r < b.paused) b.paused = r;
-        } else if (t.state === "idle" && named) {
-          b.done = true;
-        }
-        sig += list[j] + t.last_updated + (nm ? nm.state : "") + "|";
-      }
-      info.push(b);
-    }
-    if (!info.length) return;
-    // open_on_done / open_on_start: jump to the timers page (where the alarm rings).
-    // Only react to changes seen while this page is showing: the first update after the
-    // page opens just takes a snapshot (a timer started on another page isn't "new").
-    var armed = !!this._runSeen && this.isConnected;
-    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
-    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
-    for (var q = 0; this.isConnected && q < info.length; q++) {
-      var bt = buttons[info[q].i];
-      var prevRun = this._runSeen[info[q].i];
-      var started = false;
-      if (prevRun) for (var r2 = 0; r2 < info[q].running.length; r2++) if (prevRun.indexOf(info[q].running[r2]) === -1) started = true;
-      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) {
-        this._buttonTap(bt);
-      }
-      this._doneSeen[info[q].i] = info[q].done;
-      this._runSeen[info[q].i] = info[q].running;
-    }
-    if (sig !== this._badgeSig) {
-      this._badgeSig = sig;
-      this._badges = info;
-      this._paintBadges();
-    }
-    var anyActive = false;
-    for (var k = 0; k < info.length; k++) if (info[k].finishes) anyActive = true;
-    var self = this;
-    if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
-    if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    var ES = window.EchoShow;
+    if (ES && ES.timerBadges) ES.timerBadges(this);
   };
 
   // The big countdown over this page (echo-show-common's <echo-timer-overlay>). Hidden
   // while a panel (browse / speakers / queue) is open.
-  EchoMediaCard.prototype._overlayTimers = function () {
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
-    return [];
-  };
   EchoMediaCard.prototype._updateOverlay = function () {
     var el = this._ovEl;
     if (!el || !el.update) return;
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
-    el.update(this._hass, this._overlayTimers());
-  };
-
-  EchoMediaCard.prototype._paintBadges = function () {
-    var info = this._badges || [];
-    for (var i = 0; i < info.length; i++) {
-      var el = this.shadowRoot.querySelector('.bdg[data-i="' + info[i].i + '"]');
-      if (!el) continue;
-      var b = info[i];
-      var txt = b.done ? "Done" : b.finishes ? fmtCountdown((b.finishes - Date.now()) / 1000) : b.paused ? fmtCountdown(b.paused) : "";
-      if (el.textContent !== txt) el.textContent = txt;
-      if (b.done !== el.classList.contains("done")) el.classList.toggle("done");
-    }
+    var b = this._config.buttons || [];
+    for (var i = 0; i < b.length; i++) if (b[i].timers) { el.path = b[i].navigation_path || null; break; }
+    el.update(this._hass);
   };
 
   EchoMediaCard._fixImg = fixImg;

@@ -11,8 +11,8 @@
 # you're on.
 #
 # More than one Echo Show? Nothing to add: each display finds its own device entities,
-# timer set (timer.<display>_timer_1..3, created from the settings panel's Timers tab),
-# voice satellite and area from its Kiosk Satellite name. Each card also takes a
+# timers (Kiosk Satellite's own, 2026.10.14 or later), voice satellite and area from its
+# Kiosk Satellite name. Each card also takes a
 # `devices:` list of per-display overrides (matched against the Kiosk Satellite device
 # name, case-insensitive substring) for when a default isn't right.
 
@@ -23,6 +23,7 @@
 #   devices:
 #     - match: office
 #       device: office_echo_show_8
+#       node: office_echo_show_8      # its ESPHome node, if far from its name (esphome.<node>_vs_*)
 
 # Full-screen alerts (National Weather Service, persistent notifications whose id starts
 # with "echo_", and echo_notify events). Remove this block to turn them off.
@@ -70,7 +71,7 @@ views:
             active: true
           - icon: mdi:clock-outline
             navigation_path: /echo-show/timers
-            timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
+            timers: true              # countdown of this display's soonest timer
             open_on_done: true        # jump to the timers page when a timer finishes
             open_on_start: true       # ... and when one is started (e.g. by voice)
           - icon: mdi:speaker-multiple
@@ -85,7 +86,8 @@ views:
     icon: mdi:clock-outline
     type: panel
     cards:
-      # Alarms (Kiosk Satellite's own, they ring with no network), stopwatch and timers.
+      # Alarms and timers (Kiosk Satellite's own: alarms ring with no network, timers are the
+      # same ones you set by voice), and a stopwatch.
       - type: custom:echo-clock-card
         idle_path: /echo-show/weather   # go back here after idle_timeout when no timers run
         idle_timeout: 180
@@ -119,7 +121,7 @@ views:
             navigation_path: /echo-show/weather
           - icon: mdi:clock-outline
             navigation_path: /echo-show/timers
-            timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
+            timers: true
             open_on_done: true
             open_on_start: true
           - icon: mdi:speaker-multiple
@@ -162,7 +164,7 @@ views:
             navigation_path: /echo-show/weather
           - icon: mdi:clock-outline
             navigation_path: /echo-show/timers
-            timers: [timer.echo_timer_1, timer.echo_timer_2, timer.echo_timer_3]
+            timers: true
             open_on_done: true
             open_on_start: true
           - icon: mdi:speaker-multiple

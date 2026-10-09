@@ -2,8 +2,8 @@
 """Offline checks for the Home Assistant files in homeassistant/.
 
 - every YAML file parses (HA tags like !input are accepted)
-- every Jinja template in them parses, with echo_timers.jinja importable
-- the voice-parsing macros give the expected results for sample phrases
+- every Jinja template in them parses
+- the timer_finished blueprint finds a display's entities from its device
 
 HA's template filters are stubbed just enough to render the macros; this does not
 replace testing on a real Home Assistant.  Run:  python3 test/validate_ha.py
@@ -80,8 +80,6 @@ env.globals.update(
         "state_attr": lambda e, a: None,
         "as_timestamp": lambda v, d=0: d,
         "now": lambda: 0,
-        "device_entities": lambda d: {"sat-office": ["assist_satellite.office_echo"]}.get(d, []),
-        "device_attr": lambda d, a: {"sat-office": "Office Echo Show 8", "sat-new": "Kitchen Echo Show 5"}.get(d) if a == "name" else None,
     }
 )
 
@@ -113,7 +111,6 @@ for f in yaml_files:
         continue
     walk(data, str(f.relative_to(ROOT)))
 
-check_template((HA / "custom_templates" / "echo_timers.jinja").read_text(), "echo_timers.jinja")
 check_template((HA / "custom_templates" / "echo_climate.jinja").read_text(), "echo_climate.jinja")
 
 
@@ -149,61 +146,26 @@ def render(src, **kw):
     return env.from_string(src).render(**kw).strip()
 
 
-cases = {
-    "ten minutes": 600,
-    "10 minutes": 600,
-    "an hour and a half": 5400,
-    "1 hour and a half": 5400,
-    "twenty five minutes": 1500,
-    "half an hour": 1800,
-    "90 seconds": 90,
-    "2 hours 15 minutes": 8100,
-    "a couple of minutes": 120,
-    "5": 300,
-}
-for phrase, want in cases.items():
-    got = render("{% from 'echo_timers.jinja' import timer_seconds %}{{ timer_seconds(p) }}", p=phrase)
-    if str(want) != got:
-        failures.append(f"timer_seconds({phrase!r}) = {got}, expected {want}")
+env.tests["match"] = lambda v, p: re.match(p, str(v)) is not None
 
-for raw, want in {"the pasta timer": "Pasta", "my eggs": "Eggs", "": ""}.items():
-    got = render("{% from 'echo_timers.jinja' import clean_name %}{{ clean_name(n) }}", n=raw)
-    if got != want:
-        failures.append(f"clean_name({raw!r}) = {got!r}, expected {want!r}")
+# timer_finished: the entities of the display whose timer rang.
+bp = yaml.load((HA / "blueprints" / "automation" / "echo_show" / "timer_finished.yaml").read_text(), Loader=Loader)
+picks = bp["actions"][1]["variables"]
+ents = ["number.office_office_echo_show_8_media_volume", "number.office_office_echo_show_8_assistant_volume",
+        "number.office_office_echo_show_8_volume", "button.office_office_echo_show_8_postpone_screensaver",
+        "button.office_office_echo_show_8_reload_page", "select.office_office_echo_show_8_dashboard_view"]
+want = {("vol", "assistant_volume"): "number.office_office_echo_show_8_assistant_volume",
+        ("vol", "volume"): "number.office_office_echo_show_8_volume",
+        ("btn", "volume"): "button.office_office_echo_show_8_postpone_screensaver",
+        ("sel", "volume"): "select.office_office_echo_show_8_dashboard_view"}
+for (key, which), exp in want.items():
+    got = render(picks[key], ents=ents, which=which)
+    if got != exp:
+        failures.append(f"timer_finished {key} ({which}) = {got!r}, expected {exp!r}")
+if render(picks["vol"], ents=[], which="assistant_volume") != "":
+    failures.append("timer_finished vol without entities should be empty")
 
-got = render("{% from 'echo_timers.jinja' import speak_duration %}{{ speak_duration(5400) }}")
-if got != "1 hour and 30 minutes":
-    failures.append(f"speak_duration(5400) = {got!r}")
-
-displays = [{"satellite": "assist_satellite.kitchen_echo", "timer_prefix": "echo_timer"},
-            {"satellite": "assist_satellite.office_echo", "timer_prefix": "office_timer"}]
-for dev, want in {"sat-office": "1", None: "0", "unknown-device": "-1"}.items():
-    got = render("{% from 'echo_timers.jinja' import display_index %}{{ display_index(d, ds) }}", d=dev, ds=displays)
-    if got != want:
-        failures.append(f"display_index({dev!r}) = {got!r}, expected {want}")
-got = render("{% from 'echo_timers.jinja' import display_index %}{{ display_index(d, []) }}", d="sat-office")
-if got != "-1":
-    failures.append(f"display_index with no displays = {got!r}, expected -1")
-
-# Each display's own timer set, found from its device name.
-FAKE_STATES.update({"timer.office_echo_show_8_timer_1": "idle"})
-for dev, want in {"sat-office": "office_echo_show_8_timer", "sat-new": "echo_timer", None: "echo_timer"}.items():
-    got = render("{% from 'echo_timers.jinja' import prefix_for_device %}{{ prefix_for_device(d) }}", d=dev)
-    if got != want:
-        failures.append(f"prefix_for_device({dev!r}) = {got!r}, expected {want}")
-for pfx, want in {"kitchen_echo_show_5_timer": "kitchen_echo_show_5", "echo_timer": "", "office_timer": "office"}.items():
-    got = render("{% from 'echo_timers.jinja' import slug_for_prefix %}{{ slug_for_prefix(p) }}", p=pfx)
-    if got != want:
-        failures.append(f"slug_for_prefix({pfx!r}) = {got!r}, expected {want!r}")
-
-FAKE_STATES.update({"timer.echo_timer_1": "active", "input_text.echo_timer_1_name": "Pasta",
-                    "timer.echo_timer_2": "idle", "input_text.echo_timer_2_name": "Eggs",
-                    "timer.echo_timer_3": "idle", "input_text.echo_timer_3_name": ""})
-got = json.loads(render("{% from 'echo_timers.jinja' import slots_json %}{{ slots_json('echo_timer') }}"))
-if [(x["i"], x["s"], x["n"]) for x in got] != [(1, "active", "Pasta"), (2, "done", "Eggs")]:
-    failures.append(f"slots_json = {got}")
-
-print(f"checked {len(yaml_files)} YAML files, {len(cases)} duration phrases")
+print(f"checked {len(yaml_files)} YAML files")
 if failures:
     print("\nFAILED:")
     for f in failures:

@@ -10,42 +10,8 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.3";
+  var VERSION = "1.7.4";
 
-
-  // ---------- which display is this? ----------
-  // One dashboard serves several Echo Shows. Each card can carry per-display overrides
-  // (devices: [{match: "office", ...}]) chosen by the Kiosk Satellite device name.
-  // "?echo_display=<name>" in the URL (remembered in this browser) overrides it.
-
-  function echoDisplayName() {
-    if (window.__echoDisplayP) return window.__echoDisplayP;
-    var forced = null;
-    try {
-      var m = /[?&]echo_display=([^&]+)/.exec(window.location.search);
-      if (m) window.localStorage.setItem("echo-display", decodeURIComponent(m[1]));
-      forced = window.localStorage.getItem("echo-display");
-    } catch (e) { /* storage unavailable */ }
-    if (forced) window.__echoDisplayP = Promise.resolve(forced);
-    else if (window.kioskSatellite && window.kioskSatellite.getDeviceInfo) {
-      window.__echoDisplayP = window.kioskSatellite.getDeviceInfo().then(function (d) {
-        return d ? String(d.name || d.model || "") : "";
-      }, function () { return ""; });
-    } else window.__echoDisplayP = Promise.resolve("");
-    return window.__echoDisplayP;
-  }
-
-  // This display's own timer set (timer.<device>_timer_N) when Home Assistant has one.
-  function ownTimers(hass) { var ES = window.EchoShow; return ES && ES.ownTimerPrefix ? ES.ownTimerPrefix(hass) : null; }
-  function matchDisplay(devices, name) {
-    if (!devices || !name) return null;
-    var n = String(name).toLowerCase();
-    for (var i = 0; i < devices.length; i++) {
-      var mt = devices[i].match;
-      if (mt && n.indexOf(String(mt).toLowerCase()) !== -1) return devices[i];
-    }
-    return null;
-  }
 
   // ---------- small helpers ----------
 
@@ -430,30 +396,11 @@
     if (!hasWeather) throw new Error("echo-weather-card: at least one source must be a weather.* entity");
     this._config = config;
     this._sourceIndex = this._loadSource();
-    if (!this._devL) {   // this display's device (own timers, area) becomes known after the first render
+    if (!this._devL) {   // this display's device (area, timers) becomes known after the first render
       this._devL = true;
       var me = this;
-      window.addEventListener("echo-show-device", function () { if (me._hass) { me._badgeSig = ""; me._sig = ""; me.hass = me._hass; } });
+      window.addEventListener("echo-show-device", function () { if (me._hass) { me._sig = ""; me.hass = me._hass; } });
     }
-    var self = this;
-    echoDisplayName().then(function (name) {
-      var prof = matchDisplay(config.devices, name);
-      self._timerPrefix = prof && prof.timer_prefix ? prof.timer_prefix : null;
-      self._badgeSig = "";
-      self._runSeen = null;
-      self._doneSeen = null;
-      if (self._built && self._hass) self._updateBadges();
-    });
-  };
-
-  // Timers a button tracks (per-display prefix overrides the configured list).
-  EchoWeatherCard.prototype._timersFor = function (btn) {
-    if (!btn.timers) return null;
-    var pfx = this._timerPrefix || ownTimers(this._hass);
-    if (!pfx) return btn.timers;
-    var out = [];
-    for (var i = 1; i <= 3; i++) out.push("timer." + pfx + "_" + i);
-    return out;
   };
 
   EchoWeatherCard.prototype.getCardSize = function () {
@@ -529,11 +476,10 @@
 
   EchoWeatherCard.prototype.disconnectedCallback = function () {
     if (this._onPrefs) window.removeEventListener("echo-show-prefs", this._onPrefs);
-    this._runSeen = null; this._doneSeen = null;
     this._unsubscribe();
     this._unwatchConnection();
     if (this._subRetry) { clearTimeout(this._subRetry); this._subRetry = null; }
-    if (this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    if (window.EchoShow && window.EchoShow.timerBadgesDetach) window.EchoShow.timerBadgesDetach(this);
     if (this._settingsEl) this._settingsEl.close();
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
   };
@@ -620,7 +566,7 @@
     if (!btn) return;
     if (btn.action === "settings" || btn.action === "timer-settings") {
       // Shared settings panel (echo-show-common); the old timer-only popup otherwise.
-      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, { timers: this._overlayTimers() });
+      if (window.EchoShow && window.EchoShow.openSettings) window.EchoShow.openSettings(this, {});
       else if (window.EchoAlarmSettingsOpen) window.EchoAlarmSettingsOpen(this, this._rootEl, btn.settings);
     } else if (btn.navigation_path) {
       window.history.pushState(null, "", btn.navigation_path);
@@ -632,111 +578,20 @@
   };
 
   // ---------- timer countdown badges on nav buttons ----------
-  // A button with `timers: [timer.x, ...]` shows the soonest countdown next to its icon.
-  // A timer counts as "done" when it is idle but its companion input_text.<id>_name is set.
-
-  function parseHms(s) {
-    var p = String(s || "").split(":");
-    if (p.length !== 3) return 0;
-    return parseInt(p[0], 10) * 3600 + parseInt(p[1], 10) * 60 + parseFloat(p[2]);
-  }
-
-  function fmtCountdown(sec) {
-    sec = Math.max(0, Math.ceil(sec));
-    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return (h > 0 ? h + ":" + (m < 10 ? "0" : "") + m : String(m)) + ":" + (s < 10 ? "0" : "") + s;
-  }
+  // A button with `timers: true` shows this display's soonest timer (echo-show-common's EchoShow.timers).
 
   EchoWeatherCard.prototype._updateBadges = function () {
-    var buttons = this._config.buttons || [];
-    var st = this._hass.states;
-    var info = [];
-    var sig = "";
-    for (var i = 0; i < buttons.length; i++) {
-      if (!buttons[i].timers) continue;
-      var b = { i: i, done: false, finishes: 0, paused: 0, running: [] };
-      var list = this._timersFor(buttons[i]);
-      for (var j = 0; j < list.length; j++) {
-        var t = st[list[j]];
-        if (!t) continue;
-        var nm = st["input_text." + list[j].split(".")[1] + "_name"];
-        var named = nm && nm.state && nm.state !== "unknown" && nm.state !== "unavailable";
-        if (t.state === "active" || t.state === "paused") b.running.push(list[j] + "@" + (t.attributes.duration || ""));
-        if (t.state === "active" && t.attributes.finishes_at) {
-          var f = Date.parse(t.attributes.finishes_at);
-          if (!b.finishes || f < b.finishes) b.finishes = f;
-        } else if (t.state === "paused") {
-          var r = parseHms(t.attributes.remaining);
-          if (!b.paused || r < b.paused) b.paused = r;
-        } else if (t.state === "idle" && named) {
-          b.done = true;
-        }
-        sig += list[j] + t.last_updated + (nm ? nm.state : "") + "|";
-      }
-      info.push(b);
-    }
-    if (!info.length) return;
-    // open_on_done / open_on_start: jump to the button's page when one of its timers
-    // finishes, or when a new timer starts (e.g. by voice).
-    // Only react to changes seen while this page is showing: the first update after the
-    // page opens just takes a snapshot (a timer started on another page isn't "new").
-    var armed = !!this._runSeen && this.isConnected;
-    if (!this.isConnected) { this._runSeen = null; this._doneSeen = null; }
-    else if (!armed) { this._runSeen = {}; this._doneSeen = {}; }
-    for (var q = 0; this.isConnected && q < info.length; q++) {
-      var bt = buttons[info[q].i];
-      var prevRun = this._runSeen[info[q].i];
-      var started = false;
-      if (prevRun) {
-        for (var r2 = 0; r2 < info[q].running.length; r2++) {
-          var id = info[q].running[r2].split("@")[0];
-          var was = false;
-          for (var r3 = 0; r3 < prevRun.length; r3++) if (prevRun[r3].split("@")[0] === id) was = true;
-          if (!was) started = true;
-        }
-      }
-      if (armed && bt.navigation_path && ((info[q].done && !this._doneSeen[info[q].i] && bt.open_on_done) || (started && bt.open_on_start))) {
-        this._buttonTap(bt);
-      }
-      this._doneSeen[info[q].i] = info[q].done;
-      this._runSeen[info[q].i] = info[q].running;
-    }
-    if (sig !== this._badgeSig) {
-      this._badgeSig = sig;
-      this._badges = info;
-      this._paintBadges();
-    }
-    var anyActive = false;
-    for (var k = 0; k < info.length; k++) if (info[k].finishes) anyActive = true;
-    var self = this;
-    if (anyActive && !this._badgeTick) this._badgeTick = setInterval(function () { self._paintBadges(); }, 1000);
-    if (!anyActive && this._badgeTick) { clearInterval(this._badgeTick); this._badgeTick = null; }
+    var ES = window.EchoShow;
+    if (ES && ES.timerBadges) ES.timerBadges(this);
   };
 
   // The big countdown over this page (echo-show-common's <echo-timer-overlay>).
-  EchoWeatherCard.prototype._overlayTimers = function () {
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) return this._timersFor(buttons[i]);
-    return [];
-  };
   EchoWeatherCard.prototype._updateOverlay = function () {
     var el = this._ovEl;
     if (!el || !el.update) return;
-    var buttons = this._config.buttons || [];
-    for (var i = 0; i < buttons.length; i++) if (buttons[i].timers) { el.path = buttons[i].navigation_path || null; break; }
-    el.update(this._hass, this._overlayTimers());
-  };
-
-  EchoWeatherCard.prototype._paintBadges = function () {
-    var info = this._badges || [];
-    for (var i = 0; i < info.length; i++) {
-      var el = this.shadowRoot.querySelector('.bdg[data-i="' + info[i].i + '"]');
-      if (!el) continue;
-      var b = info[i];
-      var txt = b.done ? "Done" : b.finishes ? fmtCountdown((b.finishes - Date.now()) / 1000) : b.paused ? fmtCountdown(b.paused) : "";
-      if (el.textContent !== txt) el.textContent = txt;
-      if (b.done !== el.classList.contains("done")) el.classList.toggle("done");
-    }
+    var b = this._config.buttons || [];
+    for (var i = 0; i < b.length; i++) if (b[i].timers) { el.path = b[i].navigation_path || null; break; }
+    el.update(this._hass);
   };
 
   // ---------- forecast subscriptions ----------

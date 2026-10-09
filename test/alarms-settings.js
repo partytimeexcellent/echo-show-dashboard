@@ -40,13 +40,13 @@ const path = require("path");
   await p.screenshot({ path: out("sa-noshell") });
 
   // timer wheels + recents
-  await p.goto(url + "#clock-timers"); await p.reload(); await wait(800);
-  await p.evaluate(() => { localStorage.setItem("echo-timer-recents", JSON.stringify([90, 600, 2700, 3600, 45])); ["1", "2"].forEach((n) => { states["timer.echo_timer_" + n] = Object.assign({}, states["timer.echo_timer_" + n], { state: "idle" }); states["input_text.echo_timer_" + n + "_name"] = Object.assign({}, states["input_text.echo_timer_" + n + "_name"], { state: "" }); }); card.hass = Object.assign({}, hass, { states: Object.assign({}, states) }); });
-  await wait(700);
+  await p.goto(url + "?notimers#clock-timers"); await p.reload(); await wait(800);
+  await p.evaluate(() => localStorage.setItem("echo-timer-recents", JSON.stringify([90, 600, 2700, 3600, 45])));
+  await p.reload(); await wait(1200);
   await p.evaluate(() => card.shadowRoot.querySelector('.chip[data-sec="90"]').click()); await wait(600);
   await p.screenshot({ path: out("t-recents") });
   await p.evaluate(() => card.shadowRoot.querySelector(".go").click()); await wait(200);
-  console.log("start:", JSON.stringify(await p.evaluate(() => calls.filter((c) => c[0] === "script").pop())), "recents:", await p.evaluate(() => localStorage.getItem("echo-timer-recents")));
+  console.log("start:", JSON.stringify(await p.evaluate(() => calls.filter((c) => c[0] === "esphome" && c[1] === "vs_start_timer").pop())), "recents:", await p.evaluate(() => localStorage.getItem("echo-timer-recents")));
   await p.goto(url + "#clock-timers"); await p.reload(); await wait(800);
   await p.evaluate(() => card.shadowRoot.querySelector(".corner.plus").click()); await wait(600);
   await p.screenshot({ path: out("t-recents3") });

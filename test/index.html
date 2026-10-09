@@ -2,7 +2,8 @@
 <!--
   Smoke-test page for dist/echo-show-dashboard.js with a fake Home Assistant.
   Open test/index.html#weather (or #timers, #media, #notify) in a 1280x800 window,
-  or run `node test/smoke.js` (needs Playwright).
+  or run `node test/smoke.js` (needs Playwright). Timers come from a fake Kiosk Satellite
+  (?notimers, ?tdone, ?many, ?dupe, ?oldks, ?node=<name>, ?kiosk: see below).
 -->
 <html><head><meta charset="utf-8"><title>Echo Show Dashboard test</title>
 <style>html,body{margin:0;background:#000;height:100%}</style>
@@ -42,20 +43,6 @@ put(S("weather.home", "partlycloudy", { temperature: 61, humidity: 72, wind_spee
 put(S("sun.sun", "above_horizon", { elevation: 30 }));
 put(S("sensor.sun_next_rising", new Date(now + 10 * 3600e3).toISOString()));
 put(S("sensor.sun_next_setting", new Date(now + 3 * 3600e3).toISOString()));
-put(S("timer.echo_timer_1", "active", { duration: "0:10:00", finishes_at: new Date(now + 312e3).toISOString(), remaining: "0:05:12" }));
-put(S("input_text.echo_timer_1_name", "Pasta"));
-put(S("timer.echo_timer_2", "paused", { duration: "0:20:00", remaining: "0:14:30" }));
-put(S("input_text.echo_timer_2_name", "Bread"));
-put(S("timer.echo_timer_3", "idle", { duration: "0:05:00" }));
-// ?ownset: this display has its own timer set (timer.kitchen_echo_show_8_timer_N)
-if (/[?&]ownset/.test(location.search)) {
-  put(S("timer.kitchen_echo_show_8_timer_1", "active", { duration: "0:08:00", finishes_at: new Date(now + 432e3).toISOString(), remaining: "0:07:12" }));
-  put(S("input_text.kitchen_echo_show_8_timer_1_name", "Soup"));
-  put(S("timer.kitchen_echo_show_8_timer_2", "idle", { duration: "0:05:00" })); put(S("input_text.kitchen_echo_show_8_timer_2_name", ""));
-  put(S("timer.kitchen_echo_show_8_timer_3", "idle", { duration: "0:05:00" })); put(S("input_text.kitchen_echo_show_8_timer_3_name", ""));
-}
-put(S("input_text.echo_timer_3_name", ""));
-put(S("input_select.echo_timer_alarm_tone", "Chime", { options: ["Chime", "Marimba", "Bells"] }));
 put(S("input_number.echo_timer_alarm_volume", "80", { min: 10, max: 100, step: 5 }));
 var base = { volume_level: 0.35, is_volume_muted: false, supported_features: 8321599 };
 put(S("media_player.kitchen", /[?&]idle/.test(location.search) ? "idle" : "playing", Object.assign({}, base, { group_members: ["media_player.kitchen"], media_title: "Answer to Your Name", media_artist: "Protoje", media_album_name: "Ancient Future", media_duration: 234, media_position: 81, media_position_updated_at: new Date().toISOString(), entity_picture: "art.jpg" })));
@@ -96,6 +83,81 @@ put(S("binary_sensor.kitchen_" + D + "_alarm_ringing", /[?&]ringing/.test(locati
 put(S("sensor.kitchen_" + D + "_alarm_snoozed_until", "unknown"));
 put(S("button.kitchen_" + D + "_stop_alarm", "unknown"));
 put(S("button.kitchen_" + D + "_snooze_alarm", "unknown"));
+
+// ---- Kiosk Satellite timers (native Voice Satellite, 2026.10.14) ----
+// esphome.<node>_vs_* actions, the VS Timers / VS Next timer sensors, and with ?kiosk the page's
+// window.kioskSatellite timer API. ?notimers: none; ?tdone: one ringing; ?many: five; ?dupe: two
+// unnamed 5 min timers (HA can't tell them apart); ?oldks: Kiosk Satellite without the timer actions;
+// ?node=<name>: the ESPHome node differs from the entity prefix.
+var NODE = (/[?&]node=([a-z0-9_]+)/.exec(location.search) || [])[1] || D;
+var ksTimers = [], ksSeq = 0;
+function ksAdd(name, total, left, active, finished) {
+  ksTimers.push({ timer_id: "01K6TEST" + (++ksSeq), name: name, total_seconds: total, left: left, active: !!active, finished: !!finished, ends: active ? Date.now() + left * 1000 : 0 });
+}
+if (!/[?&]notimers/.test(location.search)) { ksAdd("pasta", 600, 312, true); ksAdd("bread", 1200, 870, false); }
+if (/[?&]tdone/.test(location.search)) ksAdd("eggs", 420, 0, false, true);
+if (/[?&]many/.test(location.search)) { ksAdd("rice", 1080, 640, true); ksAdd("", 300, 200, true); ksAdd("tea", 240, 95, true); }
+if (/[?&]dupe/.test(location.search)) { ksAdd("", 300, 250, true); ksAdd("", 300, 120, true); }
+function ksLeft(t) { return t.finished ? 0 : t.active ? Math.max(0, Math.round((t.ends - Date.now()) / 1000)) : t.left; }
+function ksSnap() {
+  var run = ksTimers.filter(function (t) { return !t.finished; }), done = ksTimers.filter(function (t) { return t.finished; });
+  return run.concat(done).map(function (t) {
+    return { timer_id: t.timer_id, name: t.name, total_seconds: t.total_seconds, seconds_left: ksLeft(t), is_active: t.active && !t.finished, ends_at: t.active && !t.finished ? new Date(t.ends).toISOString() : null, finished: t.finished };
+  });
+}
+// Like HA's timer intents: a timer is found by its name, or by its starting length when unnamed.
+function ksFind(id) {
+  var t = ksTimers.filter(function (x) { return x.timer_id === id && !x.finished; })[0];
+  if (!t) throw { code: "service_validation_error", message: "Timer not found" };
+  var same = ksTimers.filter(function (x) { return !x.finished && x !== t && (t.name ? x.name.toLowerCase() === t.name.toLowerCase() : !x.name && x.total_seconds === t.total_seconds); });
+  if (same.length) throw { code: "service_validation_error", message: "Several timers match. Give them different names." };
+  return t;
+}
+function ksChanged() {
+  var run = ksTimers.filter(function (t) { return !t.finished; }), act = run.filter(function (t) { return t.active; });
+  var next = act.length ? new Date(Math.min.apply(null, act.map(function (t) { return t.ends; }))).toISOString() : "unknown";
+  put(S("sensor." + D + "_vs_timers", String(run.length)));
+  put(S("sensor." + D + "_vs_next_timer", next));
+  if (window.card) card.hass = Object.assign({}, hass, { states: Object.assign({}, states) });
+  window.dispatchEvent(new CustomEvent("kiosksatellite:voice-timers", { detail: { timers: ksSnap() } }));
+}
+function ksDo(service, d) {
+  var dur = ((+d.hours || 0) * 3600) + ((+d.minutes || 0) * 60) + (+d.seconds || 0), t;
+  if (service === "vs_start_timer") ksAdd(String(d.name || ""), dur, dur, true);
+  else if (service === "vs_cancel") ksTimers = ksTimers.filter(function (x) { return !x.finished; });
+  else {
+    t = ksFind(d.timer_id);
+    if (service === "vs_pause_timer" && t.active) { t.left = ksLeft(t); t.active = false; }
+    else if (service === "vs_resume_timer" && !t.active) { t.active = true; t.ends = Date.now() + t.left * 1000; }
+    else if (service === "vs_cancel_timer") ksTimers.splice(ksTimers.indexOf(t), 1);
+    else if (service === "vs_add_time" || service === "vs_remove_time") {
+      var sg = service === "vs_add_time" ? 1 : -1;
+      if (t.active) t.ends += sg * dur * 1000; else t.left = Math.max(1, t.left + sg * dur);
+    }
+  }
+  setTimeout(ksChanged, 50);
+}
+setInterval(function () {   // timers that run out start ringing
+  var hit = false;
+  ksTimers.forEach(function (t) { if (t.active && !t.finished && t.ends <= Date.now()) { t.finished = true; t.active = false; hit = true; } });
+  if (hit) ksChanged();
+}, 250);
+put(S("sensor." + D + "_vs_timers", "0"));
+put(S("sensor." + D + "_vs_next_timer", "unknown"));
+put(S("sensor." + D + "_voice_satellite", "idle"));
+put(S("switch." + D + "_vs_mute_timers", "off"));
+var esphomeServices = {};
+["vs_wake", "vs_cancel", "vs_show", "vs_start_timer"].concat(/[?&]oldks/.test(location.search) ? [] : ["vs_list_timers", "vs_pause_timer", "vs_resume_timer", "vs_cancel_timer", "vs_add_time", "vs_remove_time"])
+  .forEach(function (n) { esphomeServices[NODE + "_" + n] = {}; });
+["vs_wake", "vs_start_timer", "vs_list_timers"].forEach(function (n) { esphomeServices["kitchen_echo_show_5_" + n] = {}; });   // another display
+if (/[?&]kiosk/.test(location.search)) window.kioskSatellite = {
+  getVoiceTimers: function () { return Promise.resolve({ timers: ksSnap() }); },
+  controlVoiceTimer: function (id, action, dur) {
+    calls.push(["js", action, id, dur]);
+    var m = { pause: "vs_pause_timer", resume: "vs_resume_timer", cancel: "vs_cancel_timer", add: "vs_add_time", remove: "vs_remove_time" }[action];
+    try { ksDo(m, Object.assign({ timer_id: id }, dur || {})); return Promise.resolve(true); } catch (e) { return Promise.resolve(false); }
+  },
+};
 
 // A fake kiosk: answers kiosk_satellite_alarm requests the way Kiosk Satellite does.
 var DN = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"], WN = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -193,13 +255,17 @@ var hass = {
   states: states,
   config: { latitude: 44, longitude: -123, unit_system: { temperature: "°F" }, time_zone: "America/Los_Angeles" },
   user: { is_admin: true, name: "Test" },
-  services: /[?&]noshell/.test(location.search) ? {} : { shell_command: { echo_kiosk: {} } },
+  services: Object.assign({ esphome: esphomeServices }, /[?&]noshell/.test(location.search) ? {} : { shell_command: { echo_kiosk: {} } }),
   language: "en", locale: { language: "en" },
   callService: function (d, s, data) { calls.push([d, s, data]); return Promise.resolve(); },
   callWS: function (m) { calls.push(["ws", m.type]);
-    if (m.type === "timer/create" || m.type === "input_text/create") {
-      if (/[?&]nonadmin/.test(location.search)) return Promise.reject({ code: "unauthorized", message: "Unauthorized" });
-      calls.push(["create", m.type, m.name]); return Promise.resolve({ id: m.name });
+    if (m.type === "call_service" && m.domain === "esphome") {
+      var sv = m.service.slice(NODE.length + 1);
+      calls.push(["esphome", sv, m.service_data]);
+      if (!esphomeServices[m.service]) return Promise.reject({ code: "not_found", message: "Action esphome." + m.service + " not found." });
+      if (sv === "vs_list_timers") return new Promise(function (r) { setTimeout(function () { r({ context: {}, response: { timers: ksSnap() } }); }, 60); });
+      try { ksDo(sv, m.service_data || {}); } catch (e) { return Promise.reject(e); }
+      return Promise.resolve({ context: {} });
     }
     if (m.type === "call_service" && m.domain === "shell_command" && m.service === "echo_kiosk") { calls.push(["ks", m.service_data.op, m.service_data.data]); return echoKiosk(m.service_data.op, m.service_data.data); }
     if (m.type === "fire_event" && m.event_type === "kiosk_satellite_alarm") {
@@ -242,10 +308,10 @@ var hass = {
     addEventListener: function () {},
   },
 };
-var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: ["timer.echo_timer_1", "timer.echo_timer_2", "timer.echo_timer_3"] }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:thermostat", navigation_path: "#climate" }, { icon: "mdi:cog", action: "settings" }];
+var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: true }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:thermostat", navigation_path: "#climate" }, { icon: "mdi:cog", action: "settings" }];
 var CONFIGS = {
   weather: ["echo-weather-card", { sources: [{ entity: "weather.home", name: "Home" }], sunrise: "sensor.sun_next_rising", sunset: "sensor.sun_next_setting", animations: false, buttons: buttons }],
-  timers: ["echo-clock-card", { buttons: buttons, alarm: false }],
+  timers: ["echo-clock-card", { buttons: buttons, presets: [{ name: "Pasta", minutes: 10 }, 1, 3, 5, 10, 15, 20, 30, 60] }],
   climate: ["echo-climate-card", { entity: "climate.thermostat", outdoor: "weather.pirate", buttons: buttons.map(function (b, i) { return i === 3 ? Object.assign({ active: true }, b) : b; }) }],
   media: ["echo-media-card", { players: [{ name: "Kitchen", entity: "media_player.kitchen" }, { name: "Living Room", entity: "media_player.living_room" }], default_player: "media_player.kitchen", buttons: buttons, quick_favorites: 0 }],
 };
@@ -265,6 +331,7 @@ if (VIEW === "notify") {
   document.body.appendChild(card);
   card.hass = hass;
   window.card = card;
+  ksChanged();
   if (CLIMATE_TAB === "house") setTimeout(function () { card._openHouse(); }, 300);
   if (CLIMATE_TAB === "day") setTimeout(function () { card._openDay("fri"); }, 300);
   if (TAB) setTimeout(function () {

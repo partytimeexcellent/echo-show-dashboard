@@ -12,7 +12,7 @@ Full-screen Home Assistant dashboard cards for an **Echo Show 8** (or any 1280×
 | | What it does |
 |---|---|
 | **Weather** (`echo-weather-card`) | Big current conditions, sunrise/sunset, AQI and moon, a 7-day chart and a 48-hour chart. Tap the source name to switch between several weather sources. |
-| **Clock** (`echo-clock-card`) | Laid out like the iOS Clock app, with three tabs. **Alarms**: the Kiosk Satellite app's own alarms, set on rolling hour/minute wheels with repeat days and a label; they ring from the tablet even when Home Assistant or Wi-Fi is down. **Stopwatch**: laps with the best and worst marked. **Timers**: three named timers picked on hour/minute/second wheels, with countdown rings, pause/resume and drag-to-adjust; works with voice commands. |
+| **Clock** (`echo-clock-card`) | Laid out like the iOS Clock app, with three tabs. **Alarms**: the Kiosk Satellite app's own alarms, set on rolling hour/minute wheels with repeat days and a label; they ring from the tablet even when Home Assistant or Wi-Fi is down. **Stopwatch**: laps with the best and worst marked. **Timers**: the display's own Kiosk Satellite timers, the same ones you set by voice, picked on hour/minute/second wheels with an optional name, with countdown rings, pause/resume and drag-to-adjust. |
 | **Media** (`echo-media-card`) | Sonos "now playing" with album art, transport, shuffle/repeat, grouping with per-speaker volume, and radio (with SomaFM's stations in their own menu), your Music Assistant library and Spotify (artist → albums → songs). Optional live queue straight from Music Assistant. |
 | **Climate** (`echo-climate-card`) | A smart thermostat run by Home Assistant. A dial with draggable heat and cool setpoints, comfort profiles (Home, Wake, Sleep, Away, Vacation), a weekly schedule you edit on the screen, holds like a real thermostat (until the next change, 2 or 4 hours, permanent, Resume), Away from who's home, room sensors per profile, smart recovery that learns how fast the house warms up, run-time charts, a filter reminder and voice commands. Comes with a reusable **house mode** (home / night / away / vacation) with a manual override. |
 | **Alerts** (`echo-notify`) | Full-screen, must-dismiss alerts over every page: National Weather Service warnings, Home Assistant notifications, or your own automations. |
@@ -39,21 +39,18 @@ Copy `dist/echo-show-dashboard.js` to `<config>/www/echo-show-dashboard/`, then 
 
 > **Upgrading from the separate card files?** Remove the old `echo-weather-card.js`, `echo-timer-card.js`, `echo-media-card.js` and `echo-notify.js` resources, so only one copy of each card loads.
 
-### 2. Helpers and scripts (timers)
+### 2. Timers (Kiosk Satellite 2026.10.14 or later)
 
-The timers live in Home Assistant, so every screen, automation and voice command sees the same ones. Only needed if you use the timers page.
+Timers are each display's own Kiosk Satellite timers: the ones you ask for by voice ("set a 10 minute pasta timer", Home Assistant's built-in timer commands), the timer pills on the screen and the Clock page's Timers tab are one list. Kiosk Satellite rings them with its timer chime. On each display:
 
-1. Copy [`homeassistant/packages/echo_show.yaml`](homeassistant/packages/echo_show.yaml) to `<config>/packages/`. If you don't use packages yet, add this to `configuration.yaml`:
-   ```yaml
-   homeassistant:
-     packages: !include_dir_named packages
-   ```
-2. Copy [`homeassistant/custom_templates/echo_timers.jinja`](homeassistant/custom_templates/echo_timers.jinja) to `<config>/custom_templates/`.
-3. Restart Home Assistant.
+1. Update Kiosk Satellite to 2026.10.14 or later.
+2. Run Voice Satellite natively, and turn on Settings › ESPHome › **Expose kiosk entities** (for its VS Timers / VS Next timer sensors).
 
-This creates the shared timer set `timer.echo_timer_1..3`, their name helpers, the alarm volume and tone settings, and the `script.echo_timer_start` / `script.echo_timer_cancel` scripts the timers page uses.
+Home Assistant then has the display's `esphome.<node>_vs_list_timers`, `_vs_start_timer`, `_vs_pause_timer`, … actions, which the dashboard uses away from the display (a desktop browser, the HA app). On the display itself it talks to Kiosk Satellite directly. Every timer started from the dashboard gets a name no other timer on that display has ("Pasta", "10 min", "10 min 2"): Home Assistant finds a timer by its name, or by its length when it has none, and can't change one of two timers that look the same.
 
-**One timer set per display.** Each display uses its own `timer.<display>_timer_1..3` (and `input_text.<display>_timer_N_name`) when they exist, where `<display>` is its Kiosk Satellite name slugified ("Kitchen Echo Show 5" → `kitchen_echo_show_5_timer_1`). To create them, open the settings panel's **Timers** tab on the display and tap **Set up timers for this display** (Home Assistant only lets an administrator create helpers; a display signed in as another user says what to create under Settings › Helpers). A display without its own set uses the shared one, so its timers also show on every other display without a set.
+Optional, for the alarm volume and the "Timer finished" automation below: copy [`homeassistant/packages/echo_show.yaml`](homeassistant/packages/echo_show.yaml) to `<config>/packages/` (add `homeassistant: packages: !include_dir_named packages` to `configuration.yaml` if you don't use packages yet) and restart Home Assistant.
+
+> **Upgrading from 1.15 or earlier?** The timer helpers (`timer.echo_timer_1..3`, `timer.<display>_timer_1..3`, their `input_text.*_name` helpers, `input_select.echo_timer_alarm_tone`), the `echo_timer_start` / `echo_timer_cancel` scripts, `custom_templates/echo_timers.jinja` and automations made from the old Timer alarm and Timer voice commands blueprints are no longer used. Delete them once the new timers work: the old voice automation takes timer sentences before Home Assistant's own timer commands can.
 
 ### 3. Climate and house mode (optional)
 
@@ -84,8 +81,7 @@ If Home Assistant is down, the thermostat simply keeps its last setpoints.
 
 | Blueprint | |
 |---|---|
-| [**Timer alarm**](homeassistant/blueprints/automation/echo_show/timer_alarm.yaml) | When a timer finishes: wake that display's screen, show its timers page, raise its volume until it's dismissed. One automation with the inputs left empty covers every display. |
-| [**Timer voice commands**](homeassistant/blueprints/automation/echo_show/timer_voice.yaml) | "Set a 10 minute pasta timer", "how long is left?", "pause my timers", "stop". One automation; each display uses its own timers, found from the satellite that heard the command. |
+| [**Timer finished**](homeassistant/blueprints/automation/echo_show/timer_finished.yaml) | When a Kiosk Satellite timer finishes: wake that display's screen, open its timers page and turn its assistant volume up to the alarm level until the alert is dismissed. One automation covers every display. |
 
 Import each one with Settings → Automations → Blueprints → **Import blueprint**, using the file's GitHub URL, then create an automation from it.
 
@@ -107,9 +103,8 @@ The [Echo Volume Buttons](ks-plugin/README.md) Kiosk Satellite plugin takes over
 One dashboard serves every display, and a new display works on its own with nothing to configure. Each display finds everything from its Kiosk Satellite name ("Kitchen Echo Show 5" → `kitchen_echo_show_5`):
 
 - **Device controls** in the settings panel: its own `switch.kitchen_echo_show_5_*`, `number.*`, … entities.
-- **Timers**: its own `timer.kitchen_echo_show_5_timer_1..3` once they exist (the settings panel's Timers tab creates them), else the shared set.
-- **Voice**: the satellite that heard a command picks the display's timers, and the timer alarm wakes the display the timer belongs to.
-- **Clock**: the timer alarm pauses while this display's own voice satellite listens.
+- **Timers**: its own Kiosk Satellite timers, through `esphome.<node>_vs_*`. The ESPHome node is found from the name too (the same name, else the one sharing the most words, so `ks_samsung_s20` goes with "Samsung S20 Kiosk"); set `node:` under `echo_show: devices:` when it isn't.
+- **Voice**: a timer set by voice belongs to the display that heard it, and the Timer finished automation wakes that display.
 - **Media**: starts on the speaker in the display's Home Assistant area (when exactly one of the card's `players` is in that area), until a room is picked in the settings panel.
 - **Alerts**: everywhere, unless sent to one display (see echo-notify).
 
@@ -118,8 +113,10 @@ Each card also takes a `devices:` list of overrides for when the defaults aren't
 ```yaml
 devices:
   - match: office            # applies on a display whose name contains "office"
-    timer_prefix: office_timer
+    default_player: media_player.office_sonos
 ```
+
+The dashboard's top-level `echo_show:` takes the same list for the display itself: `device:` (its entity prefix) and `node:` (its ESPHome node, for the timer actions).
 
 Testing in a desktop browser? Add `?echo_display=office` to the URL to pretend to be that display (remembered until you set another).
 
@@ -129,7 +126,7 @@ Testing in a desktop browser? Add `?echo_display=office` to the URL to pretend t
 
 All cards also accept `buttons` (the bottom row), `devices` (per-display overrides), `block_swipe` (default `true`: stops the kiosk's swipe-between-views gesture inside the card) and `tap_sound`.
 
-**Buttons:** each entry takes `icon`, and one of `navigation_path`, `url` or `action: settings` (opens the settings panel). Add `active: true` on the current page's button. A button with `timers: [timer.a, timer.b, …]` shows the soonest countdown next to its icon, and `open_on_done` / `open_on_start: true` jump to its page when a timer finishes or starts.
+**Buttons:** each entry takes `icon`, and one of `navigation_path`, `url` or `action: settings` (opens the settings panel). Add `active: true` on the current page's button. A button with `timers: true` shows this display's soonest timer next to its icon (or "Done" while one rings), and `open_on_done` / `open_on_start: true` jump to its page when a timer finishes or starts. (A list of timer entities, from before 1.16, works the same as `true`.)
 
 ### Settings panel and this display
 
@@ -173,12 +170,7 @@ The old name `custom:echo-timer-card` still works and gives the same card.
 | `kiosk` | this display's name | The Kiosk Satellite device name to manage alarms on. Set it (per display, under `devices`) to manage another kiosk or when the name isn't detected. |
 | `alarm_script` | | A script made from Kiosk Satellite's alarms blueprint. Only needed when the display's Home Assistant user isn't an administrator. |
 | `time_format` | HA profile | `12` or `24` for the alarm wheels and list. |
-| `timer_prefix` | this display's own set, else `echo_timer` | Uses `timer.<prefix>_1..3` and `input_text.<prefix>_N_name`. Leave it out so each display uses its own `<display>_timer` set. |
-| `start_script` / `cancel_script` | `script.echo_timer_start` / `script.echo_timer_cancel` | |
-| `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick picks (minutes) shown until this display has Recents. |
-| `alarm` | `true` | Ring in this browser when a timer finishes. |
-| `tone_entity` | `input_select.echo_timer_alarm_tone` | |
-| `satellite` | this display's own | `assist_satellite.*` whose listening pauses the alarm. The display's own Kiosk Satellite satellite is found automatically and comes first; this is only used when it can't be found. |
+| `presets` | `[1, 3, 5, 10, 15, 20, 30, 60]` | Quick picks (minutes) shown until this display has Recents. A named one, `{name: Pasta, minutes: 10}`, always shows and names the timer. |
 | `idle_path` / `idle_timeout` | / `180` | Go to this path after this many idle seconds when no timer or stopwatch is running. |
 
 #### Alarms
@@ -221,7 +213,7 @@ To delete an alarm, swipe its row to the left and tap **Delete**, or tap **Edit*
 
 Kiosk Satellite has no "edit" request, so editing an alarm deletes it and sets the new one. Alarms are matched by time and label, so two alarms at the same time need different labels to be edited here.
 
-A button with `action: timer-settings` opens the alarm settings (volume, tone, test). Its `settings: {device_volume_entity: number.x}` lets **Test** use the display's real volume.
+**Timers**: the Timers tab shows any number of timers (from four on, as a grid). Tap a ring or ± to add or take away time, ✕ to cancel. A ringing timer shows **Stop** (silences the alert, like saying "stop") and **+1 min** (starts it again for a minute). With three or more timers, + gives the new-timer wheels the whole page. The optional name field names the timer; a named preset's chip does too.
 
 ### echo-media-card
 
@@ -252,7 +244,7 @@ Without `ma_url`/`ma_token`, the queue shows the album or playlist last started 
 | `house` / `house_settings` | `sensor.echo_house_mode` / `sensor.echo_house_settings` | From the house package; the house button shows only when they exist. |
 | `hold_script` / `set_script` / `house_script` | `echo_climate_hold` / `echo_climate_set` / `echo_house_set` | Script names (without `script.`). |
 | `tabs` | `[now, schedule, comfort, insights]` | Which tabs to show. |
-| `buttons`, `devices`, `timer_prefix`, `idle_path`, `idle_timeout` | | Same as the other cards; a button with `timers:` shows the countdown here too. |
+| `buttons`, `devices`, `idle_path`, `idle_timeout` | | Same as the other cards; a button with `timers: true` shows the countdown here too. |
 
 **Now**: drag the orange (heat) or blue (cool) knob, or tap a setpoint chip and use − / +; the change is sent after a short pause as a hold of the default length. *Hold* changes how long the current setting holds; *Comfort* switches to a profile until the next change; *Resume* goes back to the schedule. The room tiles show which sensors the current profile steers by (a target icon), and an offline sensor says to check its battery.
 **Schedule**: tap a day to edit it: each row is "at this time, switch to this profile"; times on wheels; copy the day to others.
@@ -290,7 +282,7 @@ python3 test/validate_ha.py      # check the YAML/Jinja in homeassistant/
 python3 test/climate_plan.py     # scenario tests for the climate plan macro
 node test/smoke.js               # load every card in Chromium (needs Playwright)
 node test/climate.js             # drive the climate card against a fake HA
-node test/timers-own.js          # each display's own timer set and the setup button
+node test/timers-ks.js           # Kiosk Satellite timers: through HA and the kiosk's JS API
 node test/readme-shots.js        # retake the README screenshots in docs/ (also needs @mdi/js)
 ```
 

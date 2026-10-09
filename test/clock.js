@@ -51,16 +51,14 @@ const path = require("path");
   await p.screenshot({ path: out("c-sw-stopped") });
   await sr('[data-sw="left"]');   // reset
 
-  // New-timer wheels: free every slot.
-  await p.goto(url + "#clock-timers"); await p.reload(); await wait(800);
-  await p.evaluate(() => { ["1", "2"].forEach((n) => { states["timer.echo_timer_" + n] = Object.assign({}, states["timer.echo_timer_" + n], { state: "idle" }); states["input_text.echo_timer_" + n + "_name"] = Object.assign({}, states["input_text.echo_timer_" + n + "_name"], { state: "" }); }); card.hass = Object.assign({}, hass, { states: Object.assign({}, states) }); });
-  await wait(600);
+  // New-timer wheels: no timers on the kiosk.
+  await p.goto(url + "?notimers#clock-timers"); await p.reload(); await wait(1200);
   await p.screenshot({ path: out("c-timer-new") });
   await sr('.chip[data-sec="600"]'); await wait(600);
-  await sr(".go"); await wait(200);
-  console.log("start call:", JSON.stringify(await p.evaluate(() => calls.filter((c) => c[0] === "script").pop())));
+  await sr(".go"); await wait(300);
+  console.log("start call:", JSON.stringify(await p.evaluate(() => calls.filter((c) => c[0] === "esphome" && c[1] === "vs_start_timer").pop())));
   // Two timers + adder (three columns).
-  await p.goto(url + "#clock-timers"); await p.reload(); await wait(800);
+  await p.goto(url + "#clock-timers"); await p.reload(); await wait(1200);
   await sr(".corner.plus"); await wait(500);
   await p.screenshot({ path: out("c-timer-add3") });
   console.log("errors:", errs.length ? errs : "none");
