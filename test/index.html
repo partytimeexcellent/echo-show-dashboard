@@ -75,7 +75,8 @@ put(S("sensor." + D + "_cpu_temperature", "61.0", { unit_of_measurement: "°C" }
 put(S("sensor." + D + "_ipv4_address", "192.0.2.22"));
 put(S("sensor." + D + "_android_version", "Android 11"));
 put(S("sensor." + D + "_ram_available", "717.0"));
-put(S("update." + D + "_update", "on", { installed_version: "2026.9.92", latest_version: "2026.9.98" }));
+put(S("update." + D + "_update", "on", { installed_version: "2026.9.92", latest_version: "2026.10.19" }));
+put(S("sensor." + D + "_app_version", /[?&]oldks/.test(location.search) ? "2026.10.12" : "2026.10.16"));
 put(S("button." + D + "_reload_page", "unknown"));
 put(S("button." + D + "_clear_cache", "unknown"));
 // Kiosk Satellite alarm entities (with the doubled area prefix HA sometimes gives them)

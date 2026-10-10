@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.2
+
+- Settings › About shows this display's Kiosk Satellite version from the app's own App version sensor (before, only from its update entity), and says when it's older than 2026.10.14, which the Clock page's timers need.
+
 ## 1.16.1
 
 - New blueprint **Voice extras** (`voice_extras.yaml`) for what the old Timer voice commands did beyond timers: "stop" with no alert going pauses what's playing on that display (its own Music Assistant player) or in its area, "stop the alarm" stops a ringing Kiosk Satellite alarm, "show my timers" opens the timers page, and "set a timer" without a length opens it and asks how long. Timer sentences with a length stay with Home Assistant's built-in timer commands.

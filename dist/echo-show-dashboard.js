@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.16.1
+ * Echo Show Dashboard 1.16.2
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 2.0.0, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
+ * echo-show-common 2.0.1, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -34,7 +34,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.0";
+  var VERSION = "2.0.1";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -1267,8 +1267,18 @@
     return h;
   };
 
+  // "2026.10.12" < "2026.10.14", number by number.
+  var KS_TIMERS = "2026.10.14";
+  function verBelow(v, min) {
+    var a = String(v).split("."), b = min.split(".");
+    for (var i = 0; i < b.length; i++) {
+      var x = parseInt(a[i], 10) || 0, y = parseInt(b[i], 10) || 0;
+      if (x !== y) return x < y;
+    }
+    return false;
+  }
   EchoShowSettings.prototype._tab_about = function () {
-    var self = this, h = "";
+    var self = this, h = "", ksv = null;
     function kv(k, v, cls) { return v === null || v === undefined || v === "" ? "" : '<div class="kv"><span>' + esc(k) + '</span><span class="' + (cls || "") + '">' + esc(v) + "</span></div>"; }
     function sv(suffix, dom, fmt) { var id = self._dev(dom || "sensor", suffix), s = self._st(id); return s && s.state !== "unknown" && s.state !== "unavailable" ? (fmt ? fmt(s) : s.state) : null; }
     h += '<div class="sec">This display</div><div class="info">';
@@ -1280,13 +1290,13 @@
       h += kv("CPU temperature", sv("cpu_temperature", "sensor", function (s) { return Math.round(num(s.state)) + (s.attributes.unit_of_measurement || "°"); }));
       h += kv("Memory free", sv("ram_available", "sensor", function (s) { return Math.round(num(s.state)) + " MB"; }));
       h += kv("Android", sv("android_version"));
-      var up = this._st(this._dev("update", "update"));
-      if (up) {
-        h += kv("Kiosk Satellite", up.attributes.installed_version);
-        if (up.state === "on") h += kv("Update available", up.attributes.latest_version, "upd");
-      }
+      // The app's own App version sensor, else what its update entity says is installed.
+      var up = this._st(this._dev("update", "update")), ksv = sv("app_version") || (up ? up.attributes.installed_version : null);
+      h += kv("Kiosk Satellite", ksv);
+      if (up && up.state === "on" && up.attributes.latest_version !== ksv) h += kv("Update available", up.attributes.latest_version, "upd");
     }
     h += "</div>";
+    if (ksv && verBelow(ksv, KS_TIMERS)) h += '<div class="note warn">Timers on the Clock page need Kiosk Satellite ' + KS_TIMERS + " or later on this display.</div>";
     var esd = window.EchoShowDashboard;
     h += '<div class="sec">Dashboard</div><div class="info">' + kv("Echo Show Dashboard", esd ? esd.version : VERSION);
     if (esd && esd.cards) esd.cards.forEach(function (c) { var p = c.split(" "); h += kv(p[0], p[1]); });
@@ -9928,6 +9938,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.16.1", cards: ["echo-show-common 2.0.0","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.16.1 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.16.2", cards: ["echo-show-common 2.0.1","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.16.2 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

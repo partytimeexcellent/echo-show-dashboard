@@ -122,6 +122,16 @@ const path = require("path");
   check(/Update Kiosk Satellite/.test(await text()), "old Kiosk Satellite: says to update it");
   await p.screenshot({ path: out("ks-old") });
 
+  // settings > About: the Kiosk Satellite version, and a note when it's too old for timers
+  const about = () => p.evaluate(() => document.querySelector("echo-show-settings").shadowRoot.querySelector(".body").textContent);
+  await open("?oldks#settings-about");
+  let ab = await about();
+  check(/Kiosk Satellite2026\.10\.12/.test(ab) && /Update available2026\.10\.19/.test(ab) && /need Kiosk Satellite 2026\.10\.14/.test(ab), "About: version 2026.10.12, update, timers note");
+  await p.screenshot({ path: out("ks-about-old") });
+  await open("#settings-about");
+  ab = await about();
+  check(/Kiosk Satellite2026\.10\.16/.test(ab) && !/need Kiosk Satellite/.test(ab), "About: version 2026.10.16, no timers note");
+
   // settings > Timers
   await open("#settings-timers");
   const set = await p.evaluate(() => document.querySelector("echo-show-settings").shadowRoot.querySelector(".body").textContent);
