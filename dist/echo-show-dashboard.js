@@ -1,5 +1,5 @@
 /*!
- * Echo Show Dashboard 1.16.0
+ * Echo Show Dashboard 1.16.1
  * https://github.com/partytimeexcellent/echo-show-dashboard
  * echo-show-common 2.0.0, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
  * License: MIT
@@ -9928,6 +9928,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.16.0", cards: ["echo-show-common 2.0.0","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.16.0 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.16.1", cards: ["echo-show-common 2.0.0","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.16.1 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

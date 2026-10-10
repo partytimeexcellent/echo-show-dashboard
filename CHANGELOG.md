@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.1
+
+- New blueprint **Voice extras** (`voice_extras.yaml`) for what the old Timer voice commands did beyond timers: "stop" with no alert going pauses what's playing on that display (its own Music Assistant player) or in its area, "stop the alarm" stops a ringing Kiosk Satellite alarm, "show my timers" opens the timers page, and "set a timer" without a length opens it and asks how long. Timer sentences with a length stay with Home Assistant's built-in timer commands.
+
 ## 1.16.0
 
 - **Timers are Kiosk Satellite's own.** The Clock page's Timers tab, the countdown over the other pages and the button badges now show each display's Kiosk Satellite timers (2026.10.14 or later, Voice Satellite running natively): the same list as the timers set by voice and the pills on the screen. On the display the dashboard uses Kiosk Satellite's JavaScript API, so taps act at once; in a desktop browser or the HA app it uses the display's `esphome.<node>_vs_*` actions and its VS Timers / VS Next timer sensors. Starting a timer goes through `vs_start_timer`. The display's ESPHome node is found from its name (`node:` under `echo_show: devices:` sets it).

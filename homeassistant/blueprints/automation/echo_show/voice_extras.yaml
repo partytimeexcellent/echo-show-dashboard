@@ -1,0 +1,123 @@
+blueprint:
+  name: Echo Show - voice extras
+  description: >-
+    A few voice commands Home Assistant's own timer commands don't cover, for Kiosk Satellite
+    displays:
+
+    - "Stop" (also "quiet", "that's enough") with no alert going: pauses what's playing on
+      that display, or in its area. "Stop the alarm": stops a ringing Kiosk Satellite alarm.
+    - "Show my timers" / "open timers": opens the display's timers page.
+    - "Set a timer" with no length: opens the timers page and asks how long.
+
+    It never takes timer sentences that have a length ("set a 10 minute timer", "pause the
+    timer", "how much time is left"), so those stay with Home Assistant's built-in timer
+    commands. A ringing timer is silenced by "stop" on the display itself (Kiosk Satellite's
+    stop word) or a tap.
+
+    ONE automation covers every display: the display is the one that heard the command.
+  domain: automation
+  source_url: https://github.com/partytimeexcellent/echo-show-dashboard/blob/main/homeassistant/blueprints/automation/echo_show/voice_extras.yaml
+  input:
+    timers_view:
+      name: Timers view
+      description: Dashboard view to open, as the Kiosk Satellite "Dashboard view" select takes it.
+      default: echo-show/timers
+      selector:
+        text: {}
+
+mode: parallel
+max: 5
+
+variables:
+  view: !input timers_view
+  dev: "{{ trigger.device_id if trigger.device_id is defined and trigger.device_id else '' }}"
+
+triggers:
+  - trigger: conversation
+    id: stop
+    command:
+      - "stop"
+      - "okay stop"
+      - "quiet"
+      - "silence"
+      - "shut up"
+      - "that's enough"
+      - "(stop|shut) (it|that) [off]"
+      - "(stop|pause) [the] music"
+  - trigger: conversation
+    id: alarm
+    command:
+      - "(stop|dismiss|silence|turn off|shut off) [the|that|my] alarm"
+  - trigger: conversation
+    id: show
+    command:
+      - "show [me] [the|my] timers"
+      - "open [the|my] timers"
+      - "(go to|show) [the] timers page"
+  - trigger: conversation
+    id: ask
+    command:
+      - "(start|set|create|make) [a|an] [new] timer"
+      - "(start|set|create|make) another timer"
+      - "(add|new) [a] timer"
+
+actions:
+  - variables:
+      ents: "{{ device_entities(dev) | list if dev else [] }}"
+      dname: "{{ (device_attr(dev, 'name_by_user') or device_attr(dev, 'name') or '') if dev else '' }}"
+      area: "{{ area_id(dev) if dev else none }}"
+  - variables:
+      sel: "{{ ents | select('match', 'select\\..*_dashboard_view$') | first | default('', true) }}"
+      ring: "{{ ents | select('match', 'binary_sensor\\..*_alarm_ringing$') | first | default('', true) }}"
+      stop_btn: "{{ ents | select('match', 'button\\..*_stop_alarm$') | first | default('', true) }}"
+      # This display's own player (Music Assistant names it after the display), plus the players in its area.
+      players: >-
+        {% set own = 'media_player.' ~ (dname | slugify) %}
+        {% set mine = ([own] if dname and states(own) != 'unknown' else []) + ((area_entities(area) | select('match', 'media_player\\.') | list) if area else []) %}
+        {{ mine | unique | select('is_state', 'playing') | list }}
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: [show, ask]
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ sel | length > 0 }}"
+            then:
+              - action: select.select_option
+                continue_on_error: true
+                target:
+                  entity_id: "{{ sel }}"
+                data:
+                  option: "{{ view }}"
+          - if:
+              - condition: trigger
+                id: ask
+            then:
+              - set_conversation_response: How long? Say, for example, set a 10 minute timer, or pick it on the screen.
+            else:
+              - set_conversation_response: Here are your timers.
+      - conditions:
+          - condition: template
+            value_template: "{{ ring | length > 0 and is_state(ring, 'on') and stop_btn | length > 0 }}"
+        sequence:
+          - action: button.press
+            target:
+              entity_id: "{{ stop_btn }}"
+          - set_conversation_response: Alarm off.
+      - conditions:
+          - condition: trigger
+            id: alarm
+        sequence:
+          - set_conversation_response: No alarm is going off.
+      - conditions:
+          - condition: template
+            value_template: "{{ players | count > 0 }}"
+        sequence:
+          - action: media_player.media_pause
+            continue_on_error: true
+            target:
+              entity_id: "{{ players }}"
+          - set_conversation_response: Paused.
+    default:
+      - set_conversation_response: ""

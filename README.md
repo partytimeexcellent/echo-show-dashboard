@@ -82,6 +82,7 @@ If Home Assistant is down, the thermostat simply keeps its last setpoints.
 | Blueprint | |
 |---|---|
 | [**Timer finished**](homeassistant/blueprints/automation/echo_show/timer_finished.yaml) | When a Kiosk Satellite timer finishes: wake that display's screen, open its timers page and turn its assistant volume up to the alarm level until the alert is dismissed. One automation covers every display. |
+| [**Voice extras**](homeassistant/blueprints/automation/echo_show/voice_extras.yaml) | "Stop" with no alert going pauses what's playing on that display or in its area; "stop the alarm" stops a ringing Kiosk Satellite alarm; "show my timers" opens the timers page; "set a timer" without a length opens it and asks how long. Leaves every timer sentence with a length to Home Assistant's own timer commands. One automation covers every display. |
 
 Import each one with Settings → Automations → Blueprints → **Import blueprint**, using the file's GitHub URL, then create an automation from it.
 
