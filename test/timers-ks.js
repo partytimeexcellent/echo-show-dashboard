@@ -122,15 +122,17 @@ const path = require("path");
   check(/Update Kiosk Satellite/.test(await text()), "old Kiosk Satellite: says to update it");
   await p.screenshot({ path: out("ks-old") });
 
-  // settings > About: the Kiosk Satellite version, and a note when it's too old for timers
+  // settings > About: the Kiosk Satellite version; tapping Update available twice installs the update
   const about = () => p.evaluate(() => document.querySelector("echo-show-settings").shadowRoot.querySelector(".body").textContent);
-  await open("?oldks#settings-about");
-  let ab = await about();
-  check(/Kiosk Satellite2026\.10\.12/.test(ab) && /Update available2026\.10\.19/.test(ab) && /need Kiosk Satellite 2026\.10\.14/.test(ab), "About: version 2026.10.12, update, timers note");
-  await p.screenshot({ path: out("ks-about-old") });
+  const tapUpd = () => p.evaluate(() => document.querySelector("echo-show-settings").shadowRoot.querySelector('[data-a="ksupdate"]').click());
   await open("#settings-about");
-  ab = await about();
-  check(/Kiosk Satellite2026\.10\.16/.test(ab) && !/need Kiosk Satellite/.test(ab), "About: version 2026.10.16, no timers note");
+  let ab = await about();
+  check(/Kiosk Satellite2026\.10\.16/.test(ab) && /Install 2026\.10\.19/.test(ab), "About: version and Install 2026.10.19");
+  await tapUpd(); await wait(200);
+  check(/Tap again to confirm/.test(await about()) && !(await p.evaluate(() => calls.some((c) => c[0] === "update"))), "first tap asks, installs nothing");
+  await p.screenshot({ path: out("ks-about-confirm") });
+  await tapUpd(); await wait(200);
+  check(JSON.stringify(await p.evaluate(() => calls.filter((c) => c[0] === "update"))) === JSON.stringify([["update", "install", { entity_id: "update.kitchen_echo_show_8_update" }]]) && /Updating…/.test(await about()), "second tap: update.install, shows Updating");
 
   // settings > Timers
   await open("#settings-timers");

@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.16.2
+ * Echo Show Dashboard 1.16.3
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 2.0.1, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
+ * echo-show-common 2.0.2, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -34,7 +34,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.1";
+  var VERSION = "2.0.2";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -658,6 +658,11 @@
     ".kv span:first-child{opacity:.55;}",
     ".kv span:last-child{text-align:right;margin-left:2vh;word-break:break-all;}",
     ".upd{color:var(--es-hi2,#ffc266);}",
+    ".kv.tap{cursor:pointer;border-radius:1.2vh;}",
+    ".kv.tap span:last-child{white-space:nowrap;word-break:normal;}",
+    ".kv.tap .upd{text-decoration:underline;text-underline-offset:.4vh;}",
+    ".kv.tap:active{background:rgba(255,255,255,.06);}",
+    ".kv.busy{pointer-events:none;}.kv.busy .upd{text-decoration:none;opacity:.7;}",
     /* cleaning mode */
     /* theme picker */
     ".themes{display:grid;grid-template-columns:repeat(3,1fr);grid-gap:1.6vh;}",
@@ -1267,16 +1272,6 @@
     return h;
   };
 
-  // "2026.10.12" < "2026.10.14", number by number.
-  var KS_TIMERS = "2026.10.14";
-  function verBelow(v, min) {
-    var a = String(v).split("."), b = min.split(".");
-    for (var i = 0; i < b.length; i++) {
-      var x = parseInt(a[i], 10) || 0, y = parseInt(b[i], 10) || 0;
-      if (x !== y) return x < y;
-    }
-    return false;
-  }
   EchoShowSettings.prototype._tab_about = function () {
     var self = this, h = "", ksv = null;
     function kv(k, v, cls) { return v === null || v === undefined || v === "" ? "" : '<div class="kv"><span>' + esc(k) + '</span><span class="' + (cls || "") + '">' + esc(v) + "</span></div>"; }
@@ -1293,10 +1288,15 @@
       // The app's own App version sensor, else what its update entity says is installed.
       var up = this._st(this._dev("update", "update")), ksv = sv("app_version") || (up ? up.attributes.installed_version : null);
       h += kv("Kiosk Satellite", ksv);
-      if (up && up.state === "on" && up.attributes.latest_version !== ksv) h += kv("Update available", up.attributes.latest_version, "upd");
+      // Tap to install, tap again within 5 s to confirm (the app restarts).
+      if (up && (up.state === "on" || up.attributes.in_progress) && up.attributes.latest_version !== ksv) {
+        var ku = this._ksUpd || {}, busy = !!up.attributes.in_progress || ku.sent, ask = ku.ask && Date.now() - ku.ask < 5000;
+        var lbl = busy ? "Updating…" : ask ? "Tap again to confirm" : "Install " + up.attributes.latest_version;
+        h += '<div class="kv tap' + (busy ? " busy" : "") + '" role="button" data-a="ksupdate" data-id="' + esc(this._dev("update", "update")) + '"><span>Update available</span><span class="upd">' + esc(lbl) + "</span></div>";
+      }
     }
     h += "</div>";
-    if (ksv && verBelow(ksv, KS_TIMERS)) h += '<div class="note warn">Timers on the Clock page need Kiosk Satellite ' + KS_TIMERS + " or later on this display.</div>";
+    if (this._ksUpd && this._ksUpd.err) h += '<div class="note warn">' + esc(this._ksUpd.err) + "</div>";
     var esd = window.EchoShowDashboard;
     h += '<div class="sec">Dashboard</div><div class="info">' + kv("Echo Show Dashboard", esd ? esd.version : VERSION);
     if (esd && esd.cards) esd.cards.forEach(function (c) { var p = c.split(" "); h += kv(p[0], p[1]); });
@@ -1312,6 +1312,26 @@
       h += '<div class="sec">Maintenance</div><div class="btns"><div class="bt" role="button" data-a="reload"><ha-icon icon="mdi:refresh"></ha-icon>Reload page</div></div>';
     }
     return h;
+  };
+
+  // Settings › About: install the Kiosk Satellite update for this display. The first tap asks, the second installs.
+  // Home Assistant only lets an administrator install updates.
+  EchoShowSettings.prototype._ksUpdate = function (id) {
+    var self = this, ku = this._ksUpd || {}, st = this._st(id);
+    if (ku.sent || (st && st.attributes.in_progress)) return;
+    if (!ku.ask || Date.now() - ku.ask > 5000) {
+      this._ksUpd = { ask: Date.now() };
+      this._refresh(false);
+      setTimeout(function () { if (self._ksUpd && self._ksUpd.ask && !self._ksUpd.sent) { self._ksUpd = null; if (self._tab === "about") self._refresh(false); } }, 5100);
+      return;
+    }
+    this._ksUpd = { sent: true };
+    this._refresh(false);
+    this._hass.callService("update", "install", { entity_id: id }).then(null, function (e) {
+      var m = (e && (e.message || e.code)) || "";
+      self._ksUpd = { err: /unauthor|admin|permission/i.test(m) ? "Only a Home Assistant administrator can install updates. Install it from Settings › Updates in Home Assistant." : "Couldn't start the update: " + (m || "no answer from Home Assistant.") };
+      if (self._tab === "about") self._refresh(false);
+    });
   };
 
   // --- values ---
@@ -1344,6 +1364,8 @@
       h.callService("number", "set_value", { entity_id: id, value: parseFloat(v) });
     } else if (a === "press" && id) {
       h.callService("button", "press", { entity_id: id });
+    } else if (a === "ksupdate" && id) {
+      this._ksUpdate(id);
     } else if (a === "reload") {
       var rl = this._device ? this._dev("button", "reload_page") : null;
       if (rl) h.callService("button", "press", { entity_id: rl }); else window.location.reload();
@@ -9938,6 +9960,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.16.2", cards: ["echo-show-common 2.0.1","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.16.2 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.16.3", cards: ["echo-show-common 2.0.2","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.16.3 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

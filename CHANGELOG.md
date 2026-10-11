@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.16.3
+
+- Settings › About: tap **Update available** to install the display's Kiosk Satellite update (tap again to confirm; the app restarts). Needs a Home Assistant administrator, otherwise it says so.
+- The note about Kiosk Satellite being too old for timers is gone.
+
 ## 1.16.2
 
 - Settings › About shows this display's Kiosk Satellite version from the app's own App version sensor (before, only from its update entity), and says when it's older than 2026.10.14, which the Clock page's timers need.
