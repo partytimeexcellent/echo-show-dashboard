@@ -25,7 +25,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.2";
+  var VERSION = "2.1.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -522,7 +522,31 @@
       if (done !== el.classList.contains("done")) el.classList.toggle("done");
     });
   }
+  // A button with `climate: climate.x` gets a dot while that thermostat runs: orange heating, blue cooling,
+  // none when idle, at the icon's top-right corner. Painted into the card's own button, so no card needs extra CSS.
+  var RUN_COLORS = { heating: "#ff7a3d", cooling: "#4aa8ff" };
+  function runDots(card) {
+    var b = (card._config && card._config.buttons) || [], st = card._hass && card._hass.states;
+    if (!card.shadowRoot || !st) return;
+    for (var i = 0; i < b.length; i++) {
+      if (!b[i].climate) continue;
+      var btn = card.shadowRoot.querySelector('.btn[data-i="' + i + '"]');
+      if (!btn) continue;
+      var c = st[b[i].climate], col = c ? RUN_COLORS[c.attributes.hvac_action] : null;
+      var dot = btn.querySelector(".esrun");
+      if (!dot) {
+        dot = document.createElement("span");
+        dot.className = "esrun";
+        dot.style.cssText = "position:absolute;top:calc(50% - 3.1vh);left:calc(50% + 1.9vh);width:1.4vh;height:1.4vh;border-radius:50%;pointer-events:none;display:none;";
+        btn.style.position = "relative";
+        btn.appendChild(dot);
+      }
+      dot.style.display = col ? "block" : "none";
+      if (col) { dot.style.background = col; dot.style.boxShadow = "0 0 1vh " + col; }
+    }
+  }
   function badgeUpdate(card) {
+    runDots(card);
     if (!card._config || !badgeButtons(card).length) return;
     if (card._hass) tmHass(card._hass);
     if (card.isConnected && !card._tmUnsub) card._tmUnsub = tmSubscribe(function () { badgeUpdate(card); });
@@ -1657,6 +1681,7 @@
     timers: Timers,
     timerBadges: badgeUpdate,
     timerBadgesDetach: badgeDetach,
+    runDots: runDots,
     ownArea: ownArea,
     areaOf: areaOf,
     // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.

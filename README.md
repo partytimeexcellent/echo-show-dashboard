@@ -127,7 +127,7 @@ Testing in a desktop browser? Add `?echo_display=office` to the URL to pretend t
 
 All cards also accept `buttons` (the bottom row), `devices` (per-display overrides), `block_swipe` (default `true`: stops the kiosk's swipe-between-views gesture inside the card) and `tap_sound`.
 
-**Buttons:** each entry takes `icon`, and one of `navigation_path`, `url` or `action: settings` (opens the settings panel). Add `active: true` on the current page's button. A button with `timers: true` shows this display's soonest timer next to its icon (or "Done" while one rings), and `open_on_done` / `open_on_start: true` jump to its page when a timer finishes or starts. (A list of timer entities, from before 1.16, works the same as `true`.)
+**Buttons:** each entry takes `icon`, and one of `navigation_path`, `url` or `action: settings` (opens the settings panel). Add `active: true` on the current page's button. A button with `timers: true` shows this display's soonest timer next to its icon (or "Done" while one rings), and `open_on_done` / `open_on_start: true` jump to its page when a timer finishes or starts. (A list of timer entities, from before 1.16, works the same as `true`.) A button with `climate: climate.x` shows a dot while that thermostat is running: orange while heating, blue while cooling, none when idle.
 
 ### Settings panel and this display
 

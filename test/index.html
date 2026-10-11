@@ -309,7 +309,7 @@ var hass = {
     addEventListener: function () {},
   },
 };
-var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: true }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:thermostat", navigation_path: "#climate" }, { icon: "mdi:cog", action: "settings" }];
+var buttons = [{ icon: "mdi:weather-partly-cloudy", navigation_path: "#weather" }, { icon: "mdi:clock-outline", navigation_path: "#timers", timers: true }, { icon: "mdi:speaker-multiple", navigation_path: "#media" }, { icon: "mdi:thermostat", navigation_path: "#climate", climate: "climate.thermostat" }, { icon: "mdi:cog", action: "settings" }];
 var CONFIGS = {
   weather: ["echo-weather-card", { sources: [{ entity: "weather.home", name: "Home" }], sunrise: "sensor.sun_next_rising", sunset: "sensor.sun_next_setting", animations: false, buttons: buttons }],
   timers: ["echo-clock-card", { buttons: buttons, presets: [{ name: "Pasta", minutes: 10 }, 1, 3, 5, 10, 15, 20, 30, 60] }],

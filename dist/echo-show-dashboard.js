@@ -1,7 +1,7 @@
 /*!
- * Echo Show Dashboard 1.16.3
+ * Echo Show Dashboard 1.17.0
  * https://github.com/partytimeexcellent/echo-show-dashboard
- * echo-show-common 2.0.2, echo-weather-card 1.7.4, echo-clock-card 3.0.0, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
+ * echo-show-common 2.1.0, echo-weather-card 1.7.4, echo-clock-card 3.0.1, echo-media-card 1.15.2, echo-climate-card 1.0.3, echo-notify 1.3.0
  * License: MIT
  * Built from src/ by build.js. Edit the files in src/, not this one.
  */
@@ -34,7 +34,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.2";
+  var VERSION = "2.1.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -531,7 +531,31 @@
       if (done !== el.classList.contains("done")) el.classList.toggle("done");
     });
   }
+  // A button with `climate: climate.x` gets a dot while that thermostat runs: orange heating, blue cooling,
+  // none when idle, at the icon's top-right corner. Painted into the card's own button, so no card needs extra CSS.
+  var RUN_COLORS = { heating: "#ff7a3d", cooling: "#4aa8ff" };
+  function runDots(card) {
+    var b = (card._config && card._config.buttons) || [], st = card._hass && card._hass.states;
+    if (!card.shadowRoot || !st) return;
+    for (var i = 0; i < b.length; i++) {
+      if (!b[i].climate) continue;
+      var btn = card.shadowRoot.querySelector('.btn[data-i="' + i + '"]');
+      if (!btn) continue;
+      var c = st[b[i].climate], col = c ? RUN_COLORS[c.attributes.hvac_action] : null;
+      var dot = btn.querySelector(".esrun");
+      if (!dot) {
+        dot = document.createElement("span");
+        dot.className = "esrun";
+        dot.style.cssText = "position:absolute;top:calc(50% - 3.1vh);left:calc(50% + 1.9vh);width:1.4vh;height:1.4vh;border-radius:50%;pointer-events:none;display:none;";
+        btn.style.position = "relative";
+        btn.appendChild(dot);
+      }
+      dot.style.display = col ? "block" : "none";
+      if (col) { dot.style.background = col; dot.style.boxShadow = "0 0 1vh " + col; }
+    }
+  }
   function badgeUpdate(card) {
+    runDots(card);
     if (!card._config || !badgeButtons(card).length) return;
     if (card._hass) tmHass(card._hass);
     if (card.isConnected && !card._tmUnsub) card._tmUnsub = tmSubscribe(function () { badgeUpdate(card); });
@@ -1666,6 +1690,7 @@
     timers: Timers,
     timerBadges: badgeUpdate,
     timerBadgesDetach: badgeDetach,
+    runDots: runDots,
     ownArea: ownArea,
     areaOf: areaOf,
     // This display's Kiosk Satellite entity prefix (Promise), as the settings panel finds it.
@@ -2966,7 +2991,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "3.0.0";
+  var VERSION = "3.0.1";
 
   // Slider stops, in minutes.
   var STOPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 75, 90, 105, 120, 150, 180];
@@ -3995,6 +4020,7 @@
       this._update();
       this._alarmState();
       if (first) { this._alarmsShow(); this._subscribeAlarmEvents(); }
+      if (window.EchoShow && window.EchoShow.runDots) window.EchoShow.runDots(this);
       if (this._settingsEl) this._settingsEl.hass = hass;
     },
     get: function () { return this._hass; },
@@ -9960,6 +9986,6 @@
 })();
 
 ;(function () {
-  window.EchoShowDashboard = { version: "1.16.3", cards: ["echo-show-common 2.0.2","echo-weather-card 1.7.4","echo-clock-card 3.0.0","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
-  console.info("%c Echo Show Dashboard 1.16.3 ", "background:#ff8a00;color:#000;border-radius:3px");
+  window.EchoShowDashboard = { version: "1.17.0", cards: ["echo-show-common 2.1.0","echo-weather-card 1.7.4","echo-clock-card 3.0.1","echo-media-card 1.15.2","echo-climate-card 1.0.3","echo-notify 1.3.0"] };
+  console.info("%c Echo Show Dashboard 1.17.0 ", "background:#ff8a00;color:#000;border-radius:3px");
 })();

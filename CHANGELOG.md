@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.17.0
+
+- The thermostat button shows a dot while the heat or AC is actually running: orange while heating, blue while cooling, nothing when idle. Add `climate: climate.<yours>` to that button (on every page).
+
 ## 1.16.3
 
 - Settings › About: tap **Update available** to install the display's Kiosk Satellite update (tap again to confirm; the app restarts). Needs a Home Assistant administrator, otherwise it says so.
