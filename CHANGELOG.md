@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.18.0
+
+- **Try the dashboard as a Kiosk Satellite custom page** (Kiosk Satellite 2026.10.20 or later). `dist/echo-show.html` shows the same cards without loading Home Assistant's own frontend: it signs in with the display's saved dashboard login, opens Home Assistant's connection itself and reads the views and card options from your `echo-show` dashboard, so there is nothing new to configure. Copy it to `/config/www/echo-show.html`, then on the display open **Settings › Home Assistant › Custom Pages › Add page** with path `/local/echo-show.html` and pick it as the default dashboard. The cards' buttons switch pages without a reload. Another dashboard: `/local/echo-show.html?dashboard=<its url>`. Add `?perf` to see load times in a corner.
+- Settings › About shows whether the display runs the custom page or the Home Assistant dashboard, and how long the page took to show its first card (with the steps on the custom page), to compare the two.
+
 ## 1.17.0
 
 - The thermostat button shows a dot while the heat or AC is actually running: orange while heating, blue while cooling, nothing when idle. Add `climate: climate.<yours>` to that button (on every page).

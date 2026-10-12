@@ -21,6 +21,11 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
     `script.echo_climate_hold` / `script.echo_climate_set` / `script.echo_house_set`. Uses `window.EchoClockWheel`.
   - `echo-notify.js`: full-screen alerts (NWS, persistent notifications `echo_*`, `echo_notify` events).
 - `dist/echo-show-dashboard.js`: built bundle, **committed**. HACS installs it.
+- `page/echo-show.html`: the Kiosk Satellite custom page (KS 2026.10.20+), built to `dist/echo-show.html` with the icons in
+  `page/icons.json` (regenerate with `node page/icons.js <@mdi/js mdi.js>`). Runs the cards without HA's frontend: own WebSocket
+  (saved `hassTokens` login), a cut-down `hass`, `<home-assistant>.hass` for echo-notify, an `ha-icon` stand-in, views from the
+  `echo-show` dashboard picked by `#<view path>`. `lovelace/config` from the cards always answers with that dashboard.
+  Installed copy: `www/echo-show.html` in the HA config repo.
 - `ks-plugin/`: Echo Volume Buttons, a Kiosk Satellite plugin (Java, SDK 1) for the hardware volume keys. `python3 ks-plugin/tools/test.py`
   runs its tests on a plain JDK; building the ZIP needs Android build-tools, so CI (`ks-plugin.yml`) builds it and commits it to `ks-plugin/dist/`.
 - `homeassistant/`: packages, Jinja macros, the `timer_finished` blueprint, example dashboard.
@@ -35,13 +40,13 @@ app. User-facing docs are in README.md, history in CHANGELOG.md.
 - `test/`: `index.html` is a fake HA (`#climate[-schedule|-comfort|-insights|-house|-day]`, `?heating`, `?hold`, `?away`, `?rooms`, `?filter`, `?override`, `?mode=heat`) (`#weather`, `#timers`, `#clock-<tab>`, `#media`, `#notify`, `#settings-<tab>`, `?theme=<id>`,
   `?ringing`, `?noalarms`, `?idle` (media idle page), `?radio` (Music Assistant stations)) with a fake kiosk answering alarm requests; `clock.js` screenshots the Clock card's states;
   `alarm-list.js` drives the Clock Alarms tab (volume row, swipe/Edit delete, Undo); `alarms-settings.js` drives the settings Alarms tab (fake `shell_command.echo_kiosk`; `?notones`, `?noshell`);
-  `smoke.js` loads every card in Playwright; `volume-hud.js` checks the volume level bar; `timers-ks.js` checks the Kiosk Satellite timers against the fake kiosk
+  `smoke.js` loads every card in Playwright; `page.js` runs the custom page against a fake HA WebSocket server; `volume-hud.js` checks the volume level bar; `timers-ks.js` checks the Kiosk Satellite timers against the fake kiosk
   (`?notimers`, `?tdone`, `?many`, `?dupe`, `?oldks`, `?node=<name>`, `?kiosk` = fake `window.kioskSatellite`); `validate_ha.py` checks the YAML/Jinja.
 
 ## Workflow
 1. Edit `src/`, bump that file's `VERSION` (and `package.json` for a release), add to CHANGELOG.
 2. `node build.js` (CI runs `node build.js --check`, so always commit the rebuilt dist).
-3. `NODE_PATH=$(npm root -g) node test/smoke.js`, `node test/climate.js`, `python3 test/validate_ha.py` and `python3 test/climate_plan.py`.
+3. `NODE_PATH=$(npm root -g) node test/smoke.js`, `node test/page.js`, `node test/climate.js`, `python3 test/validate_ha.py` and `python3 test/climate_plan.py`.
 4. Screenshot changed views with Playwright at 1280×800 and look at them.
 5. Commit, push to main. HACS installs the latest commit; GitHub releases (any tag) attach dist.
 

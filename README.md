@@ -99,6 +99,19 @@ The [Echo Volume Buttons](ks-plugin/README.md) Kiosk Satellite plugin takes over
 
 ---
 
+## Custom page (faster, experimental)
+
+Kiosk Satellite 2026.10.20 can show a plain HTML page from Home Assistant's `www` folder instead of a dashboard.
+`dist/echo-show.html` is the dashboard as such a page: the same cards, read from your `echo-show` dashboard, but without
+loading Home Assistant's own frontend, so it starts faster on an Echo Show.
+
+1. Copy `dist/echo-show.html` to `/config/www/echo-show.html` (restart Home Assistant once if `www` is new).
+2. On the display: **Settings › Home Assistant › Custom Pages › Add page**, name *Echo Show*, path `/local/echo-show.html`,
+   **Save & Validate**, then pick it as the **Default dashboard**.
+
+It uses the display's existing Home Assistant sign-in. A different dashboard: `/local/echo-show.html?dashboard=<url>`.
+`#weather`, `#timers`, ... open a page directly. Settings › About shows how long the page took to load.
+
 ## Several Echo Shows
 
 One dashboard serves every display, and a new display works on its own with nothing to configure. Each display finds everything from its Kiosk Satellite name ("Kitchen Echo Show 5" → `kitchen_echo_show_5`):

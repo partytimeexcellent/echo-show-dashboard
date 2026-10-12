@@ -25,7 +25,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.1.0";
+  var VERSION = "2.2.0";
   if (window.EchoShow && window.EchoShow.version) return;  // loaded twice
 
   function esc(s) {
@@ -525,7 +525,16 @@
   // A button with `climate: climate.x` gets a dot while that thermostat runs: orange heating, blue cooling,
   // none when idle, at the icon's top-right corner. Painted into the card's own button, so no card needs extra CSS.
   var RUN_COLORS = { heating: "#ff7a3d", cooling: "#4aa8ff" };
+  // ---------- how long the page took to show its first card (Settings › About) ----------
+  var loadedMs = null;
+  function markLoaded(card) {
+    if (loadedMs !== null || !card.isConnected || !card._hass || !window.performance) return;
+    loadedMs = -1;
+    requestAnimationFrame(function () { requestAnimationFrame(function () { loadedMs = Math.round(performance.now()); }); });
+  }
+
   function runDots(card) {
+    markLoaded(card);
     var b = (card._config && card._config.buttons) || [], st = card._hass && card._hass.states;
     if (!card.shadowRoot || !st) return;
     for (var i = 0; i < b.length; i++) {
@@ -1315,6 +1324,12 @@
     var esd = window.EchoShowDashboard;
     h += '<div class="sec">Dashboard</div><div class="info">' + kv("Echo Show Dashboard", esd ? esd.version : VERSION);
     if (esd && esd.cards) esd.cards.forEach(function (c) { var p = c.split(" "); h += kv(p[0], p[1]); });
+    var pg = window.EchoShowPage, sec = function (ms) { return ms > 0 ? (ms / 1000).toFixed(1) + " s" : null; };
+    h += kv("Page", pg ? "Custom page " + pg.version : "Home Assistant dashboard");
+    h += kv("Loaded in", sec(loadedMs));
+    if (pg && pg.timings) {
+      h += kv("Signed in after", sec(pg.timings.signedIn)) + kv("States after", sec(pg.timings.states)) + kv("Cards loaded after", sec(pg.timings.bundle));
+    }
     h += "</div>";
     if (this._device) {
       var cc = this._dev("button", "clear_cache"), ra = this._dev("button", "restart_app");

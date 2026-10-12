@@ -59,16 +59,26 @@ var footer =
 var out = banner + parts.join("") + footer;
 new vm.Script(out, { filename: "echo-show-dashboard.js" });
 
-var dest = path.join(ROOT, "dist", "echo-show-dashboard.js");
+// The Kiosk Satellite custom page: page/echo-show.html with the icons from page/icons.json.
+var tpl = fs.readFileSync(path.join(ROOT, "page", "echo-show.html"), "utf8");
+var icons = JSON.stringify(JSON.parse(fs.readFileSync(path.join(ROOT, "page", "icons.json"), "utf8")));
+if (tpl.indexOf("/*ICONS*/{}") === -1) throw new Error("page/echo-show.html: /*ICONS*/{} placeholder missing");
+var page = tpl.replace("/*ICONS*/{}", function () { return icons; });
+
+var outputs = [["echo-show-dashboard.js", out], ["echo-show.html", page]];
 if (process.argv.indexOf("--check") !== -1) {
-  var cur = fs.existsSync(dest) ? fs.readFileSync(dest, "utf8") : "";
-  if (cur !== out) {
-    console.error("dist/echo-show-dashboard.js is out of date. Run: node build.js");
-    process.exit(1);
-  }
-  console.log("dist/ is up to date (" + out.length + " bytes)");
+  outputs.forEach(function (o) {
+    var dest = path.join(ROOT, "dist", o[0]);
+    var cur = fs.existsSync(dest) ? fs.readFileSync(dest, "utf8") : "";
+    if (cur !== o[1]) {
+      console.error("dist/" + o[0] + " is out of date. Run: node build.js");
+      process.exit(1);
+    }
+  });
+  console.log("dist/ is up to date (" + out.length + " + " + page.length + " bytes)");
 } else {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, out);
+  fs.mkdirSync(path.join(ROOT, "dist"), { recursive: true });
+  outputs.forEach(function (o) { fs.writeFileSync(path.join(ROOT, "dist", o[0]), o[1]); });
   console.log("wrote dist/echo-show-dashboard.js (" + out.length + " bytes): " + versions.join(", "));
+  console.log("wrote dist/echo-show.html (" + page.length + " bytes)");
 }

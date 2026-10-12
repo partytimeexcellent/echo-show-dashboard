@@ -1,0 +1,561 @@
+<!doctype html>
+<!--
+  Echo Show Dashboard as a Kiosk Satellite custom page (KS 2026.10.20+).
+
+  Shows the cards of a Home Assistant dashboard without loading Home Assistant's own frontend:
+  this page signs in with the dashboard's saved login (localStorage hassTokens), opens HA's
+  WebSocket itself and hands the cards a small `hass` object. The views, card options and the
+  echo_show / echo_notify blocks still come from the dashboard (default "echo-show").
+
+  Install: copy to /config/www/echo-show.html, then on the display Settings > Home Assistant >
+  Custom Pages > Add page, path /local/echo-show.html (another dashboard: ?dashboard=<url>).
+  The part after # picks the view (#weather, #timers, ...); the cards' buttons switch views
+  without a reload.
+
+  Built from page/echo-show.html by build.js (icons from page/icons.json). Edit those, not dist/.
+-->
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Echo Show</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:var(--es-bg,#000);color:#fff;
+  font-family:Roboto,"Noto Sans",-apple-system,"Segoe UI",sans-serif;-webkit-tap-highlight-color:transparent;}
+#view{position:fixed;top:0;left:0;right:0;bottom:0;}
+#view>*{display:block;height:100%;}
+#msg{position:fixed;top:0;left:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;
+  text-align:center;padding:0 10vw;font-size:3.4vh;line-height:1.5;color:#ccc;}
+#msg.on{display:flex;}
+#msg a{color:#ff8a00;}
+#perf{position:fixed;left:1vh;bottom:1vh;font:1.8vh monospace;color:#9f9;background:rgba(0,0,0,.6);padding:.4vh 1vh;
+  border-radius:.6vh;display:none;z-index:9999;pointer-events:none;}
+</style>
+<script>
+/* ===== ha-icon: Material Design Icons without Home Assistant's frontend ===== */
+(function () {
+  "use strict";
+  var ICONS = /*ICONS*/{};
+  var waiting = {}, meta = null;
+
+  // Icons not bundled: Home Assistant's own icon chunks, else the MDI package on jsDelivr.
+  function haMeta() {
+    if (!meta) meta = fetch("/static/mdi/iconMetadata.json").then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    return meta;
+  }
+  function fromHa(name) {
+    return haMeta().then(function (m) {
+      if (!m || !m.parts) return null;
+      var file = null;
+      for (var i = 0; i < m.parts.length; i++) {
+        if (m.parts[i].start && m.parts[i].start > name) break;
+        file = m.parts[i].file;
+      }
+      if (!file) return null;
+      return fetch("/static/mdi/" + file + ".json").then(function (r) { return r.ok ? r.json() : null; }).then(function (chunk) {
+        if (!chunk) return null;
+        for (var k in chunk) if (!ICONS[k]) ICONS[k] = chunk[k];
+        return chunk[name] || null;
+      });
+    }).catch(function () { return null; });
+  }
+  function fromCdn(name) {
+    return fetch("https://cdn.jsdelivr.net/npm/@mdi/svg@7.4.47/svg/" + name + ".svg").then(function (r) { return r.ok ? r.text() : ""; })
+      .then(function (svg) { var m = / d="([^"]+)"/.exec(svg); return m ? m[1] : null; }).catch(function () { return null; });
+  }
+  function load(name, cb) {
+    if (ICONS[name] !== undefined) { cb(ICONS[name]); return; }
+    if (waiting[name]) { waiting[name].push(cb); return; }
+    waiting[name] = [cb];
+    fromHa(name).then(function (d) { return d || fromCdn(name); }).then(function (d) {
+      ICONS[name] = d || "";
+      var cbs = waiting[name]; delete waiting[name];
+      cbs.forEach(function (f) { f(ICONS[name]); });
+    });
+  }
+
+  var CSS = ":host{fill:currentcolor;}" +
+    "span{display:var(--ha-icon-display,inline-flex);align-items:center;justify-content:center;position:relative;vertical-align:middle;" +
+    "width:var(--mdc-icon-size,24px);height:var(--mdc-icon-size,24px);}" +
+    "svg{width:100%;height:100%;pointer-events:none;display:block;}";
+
+  function HaIcon() { return Reflect.construct(HTMLElement, [], HaIcon); }
+  HaIcon.prototype = Object.create(HTMLElement.prototype);
+  HaIcon.prototype.constructor = HaIcon;
+  Object.setPrototypeOf(HaIcon, HTMLElement);
+  Object.defineProperty(HaIcon, "observedAttributes", { get: function () { return ["icon"]; } });
+  Object.defineProperty(HaIcon.prototype, "icon", {
+    get: function () { return this.getAttribute("icon"); },
+    set: function (v) { if (v) this.setAttribute("icon", v); else this.removeAttribute("icon"); },
+  });
+  HaIcon.prototype.connectedCallback = function () { this._draw(); };
+  HaIcon.prototype.attributeChangedCallback = function () { if (this._path) this._draw(); };
+  HaIcon.prototype._draw = function () {
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" }).innerHTML = "<style>" + CSS + '</style><span><svg viewBox="0 0 24 24"><path></path></svg></span>';
+      this._path = this.shadowRoot.querySelector("path");
+    }
+    var self = this, name = String(this.getAttribute("icon") || "").replace(/^mdi:/, "");
+    this._want = name;
+    if (!name) { this._path.removeAttribute("d"); return; }
+    load(name, function (d) { if (self._want === name) { if (d) self._path.setAttribute("d", d); else self._path.removeAttribute("d"); } });
+  };
+  if (!customElements.get("ha-icon")) customElements.define("ha-icon", HaIcon);
+})();
+</script>
+</head><body>
+<home-assistant></home-assistant>
+<div id="view"></div>
+<div id="msg"></div>
+<div id="perf"></div>
+<script>
+/* ===== Home Assistant connection and the `hass` object the cards expect ===== */
+(function () {
+  "use strict";
+  var PAGE_VERSION = "1.0.0";
+  var t0 = window.performance ? 0 : Date.now();
+  function now() { return window.performance ? performance.now() : Date.now() - t0; }
+  var timings = {};
+  function mark(k) { if (timings[k] === undefined) timings[k] = Math.round(now()); }
+  var params = {};
+  location.search.replace(/^\?/, "").split("&").forEach(function (p) {
+    if (!p) return;
+    var i = p.indexOf("=");
+    params[decodeURIComponent(i < 0 ? p : p.slice(0, i))] = i < 0 ? "" : decodeURIComponent(p.slice(i + 1).replace(/\+/g, " "));
+  });
+  var DASH = params.dashboard || "echo-show";
+  var PAGE_URL = location.pathname + location.search;
+  window.EchoShowPage = { version: PAGE_VERSION, dashboard: DASH, timings: timings };
+
+  var msgEl = document.getElementById("msg"), viewEl = document.getElementById("view"), haEl = document.querySelector("home-assistant");
+  function say(html) { msgEl.innerHTML = html || ""; msgEl.className = html ? "on" : ""; }
+
+  // ---------- sign-in: the dashboard's saved session ----------
+  function tokens() { try { return JSON.parse(localStorage.getItem("hassTokens")); } catch (e) { return null; } }
+  var refreshing = null;
+  function refresh(t) {
+    if (refreshing) return refreshing;
+    var body = "grant_type=refresh_token&client_id=" + encodeURIComponent(t.clientId || location.origin + "/") +
+      "&refresh_token=" + encodeURIComponent(t.refresh_token);
+    refreshing = fetch("/auth/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body, credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status === 400 || r.status === 403 ? "login" : "refresh " + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        var cur = tokens() || t;
+        cur.access_token = j.access_token;
+        cur.expires_in = j.expires_in;
+        cur.expires = Date.now() + j.expires_in * 1000;
+        try { localStorage.setItem("hassTokens", JSON.stringify(cur)); } catch (e) { /* storage full */ }
+        return cur.access_token;
+      });
+    refreshing.then(function () { refreshing = null; }, function () { refreshing = null; });
+    return refreshing;
+  }
+  function accessToken(force) {
+    var t = tokens();
+    if (!t || !t.access_token) return Promise.reject(new Error("login"));
+    if (force || (t.expires && t.expires - 30000 < Date.now())) return refresh(t);
+    return Promise.resolve(t.access_token);
+  }
+  function needLogin() {
+    say("This display isn't signed in to Home Assistant yet.<br>Open its Home Assistant dashboard once and sign in, then come back.<br><br>" +
+      '<a href="/' + DASH + '">Open the dashboard</a>');
+  }
+
+  // ---------- WebSocket (what home-assistant-js-websocket's Connection does, cut down) ----------
+  function Conn() {
+    this.ws = null; this.id = 1; this.ready = false;
+    this.pending = {};      // id -> {resolve, reject}
+    this.subs = {};         // key -> {msg, cb, id, resolve, reject}
+    this.queue = [];        // messages waiting for the socket
+    this.listeners = { ready: [], disconnected: [] };
+    this.retry = 0;
+    this.haVersion = null;
+  }
+  Conn.prototype.addEventListener = function (ev, cb) { (this.listeners[ev] = this.listeners[ev] || []).push(cb); };
+  Conn.prototype.removeEventListener = function (ev, cb) {
+    var l = this.listeners[ev] || [], i = l.indexOf(cb);
+    if (i !== -1) l.splice(i, 1);
+  };
+  Conn.prototype._fire = function (ev) {
+    var self = this;
+    (this.listeners[ev] || []).slice().forEach(function (cb) { try { cb(self, ev); } catch (e) { console.error(e); } });
+  };
+  Conn.prototype.connect = function () {
+    var self = this;
+    accessToken(false).then(function (tok) { self._open(tok); }, function (e) {
+      if (e && e.message === "login") needLogin();
+      else self._later();
+    });
+  };
+  Conn.prototype._open = function (tok) {
+    var self = this, triedRefresh = false;
+    var ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/api/websocket");
+    this.ws = ws;
+    ws.onopen = function () { mark("socket"); };
+    ws.onmessage = function (ev) {
+      var data;
+      try { data = JSON.parse(ev.data); } catch (e) { return; }
+      if (Array.isArray(data)) data.forEach(function (m) { self._msg(m); });
+      else self._msg(data);
+    };
+    ws.onclose = function () {
+      if (self.ws !== ws) return;
+      var was = self.ready;
+      self.ready = false; self.ws = null;
+      for (var id in self.pending) self.pending[id].reject({ code: "connection_lost", message: "Connection lost" });
+      self.pending = {};
+      if (was) self._fire("disconnected");
+      self._later();
+    };
+    this._auth = function (m) {
+      if (m.type === "auth_required") { ws.send(JSON.stringify({ type: "auth", access_token: tok })); return true; }
+      if (m.type === "auth_invalid") {
+        self.ws = null; ws.onclose = null; ws.close();
+        if (triedRefresh) { needLogin(); return true; }
+        triedRefresh = true;
+        accessToken(true).then(function (t2) { tok = t2; self._open(t2); }, function (e) { if (e && e.message === "login") needLogin(); else self._later(); });
+        return true;
+      }
+      if (m.type === "auth_ok") {
+        mark("signedIn");
+        self.haVersion = m.ha_version;
+        self.ready = true; self.retry = 0;
+        ws.send(JSON.stringify({ id: self.id++, type: "supported_features", features: { coalesce_messages: 1 } }));
+        for (var k in self.subs) self._subscribe(self.subs[k]);
+        var q = self.queue; self.queue = [];
+        q.forEach(function (x) { self._send(x.msg, x.resolve, x.reject); });
+        self._fire("ready");
+        return true;
+      }
+      return false;
+    };
+  };
+  Conn.prototype._later = function () {
+    var self = this, wait = Math.min(30000, 1000 * Math.pow(2, this.retry++));
+    setTimeout(function () { self.connect(); }, wait);
+  };
+  Conn.prototype._msg = function (m) {
+    if (this._auth && this._auth(m)) return;
+    if (m.type === "event") {
+      var sub = this._subById(m.id);
+      if (sub) { try { sub.cb(m.event); } catch (e) { console.error(e); } }
+      return;
+    }
+    if (m.type === "result" || m.type === "pong") {
+      var sb = this._subById(m.id);
+      if (sb && sb.resolve) {
+        if (m.success) { sb.resolve(sb.unsub); sb.resolve = null; }
+        else { sb.reject(m.error); this._dropSub(sb); }
+        return;
+      }
+      var p = this.pending[m.id];
+      if (!p) return;
+      delete this.pending[m.id];
+      if (m.type === "pong" || m.success) p.resolve(m.result);
+      else p.reject(m.error);
+    }
+  };
+  Conn.prototype._subById = function (id) {
+    for (var k in this.subs) if (this.subs[k].id === id) return this.subs[k];
+    return null;
+  };
+  Conn.prototype._dropSub = function (sub) { for (var k in this.subs) if (this.subs[k] === sub) delete this.subs[k]; };
+  Conn.prototype._send = function (msg, resolve, reject) {
+    var id = this.id++, out = {}, k;
+    for (k in msg) out[k] = msg[k];
+    out.id = id;
+    this.pending[id] = { resolve: resolve, reject: reject };
+    this.ws.send(JSON.stringify(out));
+  };
+  Conn.prototype.sendMessagePromise = function (msg) {
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      if (self.ready && self.ws) self._send(msg, resolve, reject);
+      else self.queue.push({ msg: msg, resolve: resolve, reject: reject });
+    });
+  };
+  Conn.prototype.sendMessage = function (msg) { this.sendMessagePromise(msg).catch(function () {}); };
+  var subKey = 0;
+  Conn.prototype._subscribe = function (sub) {
+    var out = {}, k;
+    for (k in sub.msg) out[k] = sub.msg[k];
+    sub.id = this.id++;
+    out.id = sub.id;
+    this.ws.send(JSON.stringify(out));
+  };
+  // Like the library: resolves with an unsubscribe function, and subscribes again after a reconnect.
+  Conn.prototype.subscribeMessage = function (cb, msg) {
+    var self = this, key = "s" + (subKey++);
+    return new Promise(function (resolve, reject) {
+      var sub = { msg: msg, cb: cb, id: null, resolve: resolve, reject: reject };
+      sub.unsub = function () {
+        if (!self.subs[key]) return Promise.resolve();
+        delete self.subs[key];
+        if (self.ready && sub.id !== null) return self.sendMessagePromise({ type: "unsubscribe_events", subscription: sub.id }).catch(function () {});
+        return Promise.resolve();
+      };
+      self.subs[key] = sub;
+      if (self.ready && self.ws) self._subscribe(sub);
+    });
+  };
+  Conn.prototype.subscribeEvents = function (cb, eventType) {
+    var msg = { type: "subscribe_events" };
+    if (eventType) msg.event_type = eventType;
+    return this.subscribeMessage(cb, msg);
+  };
+  Conn.prototype.ping = function () { return this.sendMessagePromise({ type: "ping" }); };
+
+  var conn = new Conn();
+
+  // ---------- states (subscribe_entities, compressed) ----------
+  var states = {}, dirty = false, flushT = null;
+  function iso(sec) { return new Date(sec * 1000).toISOString(); }
+  function ctx(c, old) {
+    if (typeof c === "string") { var o = {}, k; if (old) for (k in old) o[k] = old[k]; o.id = c; return o; }
+    if (old) return Object.assign({}, old, c);
+    return c;
+  }
+  function onEntities(ev) {
+    var next = Object.assign({}, states), id;
+    if (ev.a) for (id in ev.a) {
+      var s = ev.a[id], lc = iso(s.lc);
+      next[id] = { entity_id: id, state: s.s, attributes: s.a || {}, context: ctx(s.c, { id: "", parent_id: null, user_id: null }),
+        last_changed: lc, last_updated: s.lu ? iso(s.lu) : lc };
+    }
+    if (ev.r) ev.r.forEach(function (rid) { delete next[rid]; });
+    if (ev.c) for (id in ev.c) {
+      var cur = next[id];
+      if (!cur) continue;
+      var e = Object.assign({}, cur), add = ev.c[id]["+"], rem = ev.c[id]["-"];
+      var attrs = (add && add.a) || (rem && rem.a) ? Object.assign({}, cur.attributes) : cur.attributes;
+      if (add) {
+        if (add.s !== undefined) e.state = add.s;
+        if (add.c) e.context = ctx(add.c, e.context);
+        if (add.lc) e.last_updated = e.last_changed = iso(add.lc);
+        else if (add.lu) e.last_updated = iso(add.lu);
+        if (add.a) Object.assign(attrs, add.a);
+      }
+      if (rem && rem.a) rem.a.forEach(function (k) { delete attrs[k]; });
+      e.attributes = attrs;
+      next[id] = e;
+    }
+    states = next;
+    if (!timings.states) mark("states");
+    changed();
+  }
+
+  // ---------- the rest of hass ----------
+  var info = { config: null, services: null, user: null, entities: {}, devices: {}, areas: {}, locale: null };
+  var dashP = null;
+  function dashboardConfig() {
+    if (!dashP) {
+      dashP = conn.sendMessagePromise({ type: "lovelace/config", url_path: DASH === "lovelace" ? null : DASH });
+      dashP.catch(function () { dashP = null; });
+    }
+    return dashP;
+  }
+  function loadInfo() {
+    var jobs = [
+      conn.sendMessagePromise({ type: "get_config" }).then(function (c) { info.config = c; }),
+      conn.sendMessagePromise({ type: "get_services" }).then(function (s) { info.services = s; }),
+      conn.sendMessagePromise({ type: "auth/current_user" }).then(function (u) { info.user = u; }),
+      conn.sendMessagePromise({ type: "frontend/get_user_data", key: "language" }).then(function (r) { info.userLocale = r && r.value; }, function () {}),
+      conn.sendMessagePromise({ type: "config/entity_registry/list_for_display" }).then(function (r) {
+        var out = {};
+        (r && r.entities || []).forEach(function (e) {
+          out[e.ei] = { entity_id: e.ei, device_id: e.di || null, area_id: e.ai || null, platform: e.pl, name: e.en, icon: e.ic, hidden: !!e.hb, entity_category: e.ec !== undefined && r.entity_categories ? r.entity_categories[e.ec] : null };
+        });
+        info.entities = out;
+      }, function () {}),
+      conn.sendMessagePromise({ type: "config/device_registry/list" }).then(function (r) {
+        var out = {};
+        (r || []).forEach(function (d) { out[d.id] = d; });
+        info.devices = out;
+      }, function () {}),
+      conn.sendMessagePromise({ type: "config/area_registry/list" }).then(function (r) {
+        var out = {};
+        (r || []).forEach(function (a) { out[a.area_id] = a; });
+        info.areas = out;
+      }, function () {}),
+    ];
+    return Promise.all(jobs.map(function (j) { return j.catch(function (e) { console.warn("echo-show page:", e); }); }));
+  }
+  function locale() {
+    var u = info.userLocale || {}, lang = u.language || (info.config && info.config.language) || navigator.language || "en";
+    return { language: lang, number_format: u.number_format || "language", time_format: u.time_format || "language",
+      date_format: u.date_format || "language", time_zone: u.time_zone || "local", first_weekday: u.first_weekday || "language" };
+  }
+  function callService(domain, service, data, target, notifyOnError, returnResponse) {
+    var msg = { type: "call_service", domain: domain, service: service, service_data: data || {} };
+    if (target) msg.target = target;
+    if (returnResponse) msg.return_response = true;
+    return conn.sendMessagePromise(msg);
+  }
+  function callWS(msg) {
+    // The cards ask for their dashboard by the first part of the address, which here is "local".
+    if (msg && msg.type === "lovelace/config") return dashboardConfig();
+    return conn.sendMessagePromise(msg);
+  }
+  function callApi(method, path, body) {
+    return accessToken(false).then(function (tok) {
+      return fetch("/api/" + path, { method: method, headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+    }).then(function (r) { return r.ok ? r.text().then(function (t) { try { return JSON.parse(t); } catch (e) { return t; } }) : Promise.reject(r); });
+  }
+  var hass = null;
+  function buildHass() {
+    var loc = locale();
+    hass = {
+      states: states, entities: info.entities, devices: info.devices, areas: info.areas,
+      services: info.services || {}, config: info.config || {}, user: info.user,
+      locale: loc, language: loc.language, selectedLanguage: null, themes: { default_theme: "default", themes: {} },
+      selectedTheme: null, panels: {}, panelUrl: DASH, dockedSidebar: "always_hidden", kioskMode: true,
+      connected: conn.ready, connection: conn, auth: { data: { hassUrl: location.origin } },
+      callService: callService, callWS: callWS, callApi: callApi,
+      sendWS: function (m) { conn.sendMessage(m); },
+      formatEntityState: function (s) { return s ? s.state : ""; },
+      localize: function (k) { return k; },
+    };
+    haEl.hass = hass;
+    return hass;
+  }
+  function changed() {
+    dirty = true;
+    if (flushT) return;
+    flushT = setTimeout(flush, 30);
+  }
+  function flush() {
+    flushT = null;
+    if (!dirty || !ready) return;
+    dirty = false;
+    buildHass();
+    if (current && current.el) current.el.hass = hass;
+  }
+
+  // ---------- views ----------
+  var views = [], cache = {}, current = null, ready = false;
+  function viewKey(v, i) { return String(v.path || i); }
+  function findView(key) {
+    for (var i = 0; i < views.length; i++) if (viewKey(views[i], i) === key) return i;
+    return -1;
+  }
+  function firstCustom(view) {
+    var list = view.cards || (view.sections ? [].concat.apply([], view.sections.map(function (s) { return s.cards || []; })) : []);
+    for (var i = 0; i < list.length; i++) if (String(list[i].type || "").indexOf("custom:") === 0) return list[i];
+    return null;
+  }
+  function cardFor(i) {
+    var key = viewKey(views[i], i);
+    if (cache[key]) return cache[key];
+    var cfg = firstCustom(views[i]), entry = { key: key, el: null, error: null };
+    if (!cfg) entry.error = "This view has no Echo Show card.";
+    else {
+      var tag = cfg.type.slice(7);
+      if (!customElements.get(tag)) entry.error = "Card " + tag + " isn't loaded.";
+      else {
+        entry.el = document.createElement(tag);
+        try { entry.el.setConfig(cfg); } catch (e) { entry.error = String(e && e.message || e); entry.el = null; }
+      }
+    }
+    cache[key] = entry;
+    return entry;
+  }
+  function show(i) {
+    if (i < 0 || i >= views.length) i = 0;
+    var entry = cardFor(i);
+    if (current === entry && entry.el && entry.el.parentNode) return;
+    current = entry;
+    while (viewEl.firstChild) viewEl.removeChild(viewEl.firstChild);
+    if (entry.error) { say(entry.error); return; }
+    say("");
+    entry.el.hass = hass || buildHass();
+    viewEl.appendChild(entry.el);
+    if (!timings.firstCard) {
+      requestAnimationFrame(function () { requestAnimationFrame(function () { mark("firstCard"); perf(); }); });
+    }
+  }
+  function route() {
+    if (!ready) return;
+    var key = decodeURIComponent(location.hash.replace(/^#/, ""));
+    show(key ? findView(key) : 0);
+  }
+  // The cards navigate with history.pushState("/<dashboard>/<view>") + "location-changed", as inside HA.
+  window.addEventListener("location-changed", function () {
+    var parts = location.pathname.split("/").filter(Boolean);
+    if (location.pathname + location.search === PAGE_URL) { route(); return; }
+    if (parts.length >= 2 && parts[0] === DASH && findView(parts[1]) !== -1) {
+      history.replaceState(history.state, "", PAGE_URL + "#" + parts[1]);
+      route();
+      return;
+    }
+    if (parts[0] === DASH && parts.length === 1) { history.replaceState(history.state, "", PAGE_URL); route(); return; }
+    location.href = location.pathname + location.search + location.hash;   // somewhere else in HA: really go there
+  });
+  window.addEventListener("hashchange", route);
+  window.addEventListener("popstate", route);
+
+  function perf() {
+    var el = document.getElementById("perf");
+    if (params.perf === undefined) return;
+    var t = timings;
+    el.textContent = "socket " + t.socket + " · signed in " + t.signedIn + " · states " + t.states + " · bundle " + t.bundle + " · card " + t.firstCard + " ms";
+    el.style.display = "block";
+  }
+
+  // ---------- the cards: the dashboard's own Echo Show Dashboard resource ----------
+  var bundleP = null;
+  function loadBundle(url) {
+    if (bundleP) return bundleP;
+    bundleP = new Promise(function (resolve) {
+      var s = document.createElement("script");
+      s.src = url;
+      s.onload = function () { mark("bundle"); resolve(true); };
+      s.onerror = function () { resolve(false); };
+      document.head.appendChild(s);
+    });
+    return bundleP;
+  }
+  function bundleUrl() {
+    if (params.bundle) return Promise.resolve(params.bundle);
+    var fallback = "/hacsfiles/echo-show-dashboard/echo-show-dashboard.js";
+    return conn.sendMessagePromise({ type: "lovelace/resources" }).then(function (list) {
+      for (var i = 0; i < (list || []).length; i++) if (/echo-show-dashboard\.js/.test(list[i].url)) return list[i].url;
+      return fallback;
+    }, function () { return fallback; });
+  }
+
+  // ---------- start ----------
+  conn.addEventListener("ready", function () {
+    if (ready) {   // reconnected: the registries may have changed
+      loadInfo().then(changed);
+      return;
+    }
+    var statesP = new Promise(function (resolve) {
+      var first = true;
+      conn.subscribeMessage(function (ev) { onEntities(ev); if (first) { first = false; resolve(); } }, { type: "subscribe_entities" });
+    });
+    var cardsP = bundleUrl().then(loadBundle);
+    Promise.all([dashboardConfig(), loadInfo(), statesP, cardsP]).then(function (r) {
+      var cfg = r[0] || {};
+      views = cfg.views || [];
+      if (!r[3]) { say("Couldn't load the Echo Show Dashboard cards. Is it installed through HACS?"); return; }
+      if (!views.length) { say("The dashboard “" + DASH + "” has no views."); return; }
+      ready = true;
+      buildHass();
+      route();
+    }, function (e) {
+      say("Couldn't read the dashboard “" + DASH + "”: " + (e && e.message || e && e.code || e));
+    });
+  });
+  conn.addEventListener("disconnected", function () { if (hass) { hass = Object.assign({}, hass, { connected: false }); haEl.hass = hass; } });
+  // Back from the screensaver or a sleep: make sure the socket still answers.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && conn.ready && conn.ws) {
+      var ws = conn.ws, t = setTimeout(function () { if (conn.ws === ws) ws.close(); }, 5000);
+      conn.ping().then(function () { clearTimeout(t); }, function () { clearTimeout(t); });
+    }
+  });
+  conn.connect();
+})();
+</script>
+</body></html>
